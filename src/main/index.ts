@@ -1,10 +1,18 @@
 import { join } from 'node:path'
 import { app, shell, BrowserWindow } from 'electron'
+import { registerDisplayMediaHandler } from './capture'
+import { registerIpcHandlers } from './ipc-handlers'
 
 // Token --bg-app do UISPEC: pintar a janela antes do primeiro frame evita flash branco.
 const APP_BACKGROUND = '#0e0b12'
 
 let mainWindow: BrowserWindow | null = null
+
+// Isolamento de perfil para rodar varias instancias na mesma maquina (dev/E2E).
+const userDataOverride = process.env['ZOI_USER_DATA_DIR']
+if (userDataOverride) {
+  app.setPath('userData', userDataOverride)
+}
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -57,6 +65,9 @@ if (!gotTheLock) {
 
   void app.whenReady().then(() => {
     app.setAppUserModelId('com.pontin.zoidagoiaba')
+
+    registerIpcHandlers()
+    registerDisplayMediaHandler()
 
     mainWindow = createWindow()
 
