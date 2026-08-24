@@ -1,0 +1,17 @@
+# Dependencias / build
+node_modules/
+dist/
+out/
+release/
+
+# Forge - artefatos efemeros (o "porque" versionado fica; o "como esta indo" nao)
+.forge/**/CHECKLIST_*.md
+.forge/**/CHECKLIST_MANUAL_*.md
+.forge/**/REPORT_TEST_*.md
+.forge/**/HANDOFF_*.md
+.forge/**/STATE_*.md
+.forge/**/ui-refs/
+
+# Ambiente
+.env
+.env.*
