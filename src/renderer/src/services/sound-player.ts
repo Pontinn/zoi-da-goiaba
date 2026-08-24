@@ -4,6 +4,7 @@
 // em `assets\audios\` sao uma COPIA versionada, importada como asset do Vite para
 // entrar no bundle: zero download em runtime. Ao trocar um som, troque na raiz e
 // copie de novo (a pasta `audios\originais` nunca e empacotada).
+import { SOUND_IDS, type SoundId } from '@shared/sounds'
 import enteredUrl from '../assets/audios/entrou.m4a'
 import leftUrl from '../assets/audios/saiu.m4a'
 import transmittingUrl from '../assets/audios/transmitindo.m4a'
@@ -12,14 +13,7 @@ import removedUrl from '../assets/audios/desconectado.m4a'
 import connectionErrorUrl from '../assets/audios/erro-conexao.m4a'
 import reconnectedUrl from '../assets/audios/reconectado.m4a'
 
-export type SoundId =
-  | 'entered'
-  | 'left'
-  | 'transmitting'
-  | 'stoppedTransmitting'
-  | 'removed'
-  | 'connectionError'
-  | 'reconnected'
+export { SOUND_IDS, type SoundId }
 
 /** URLs dos assets ja resolvidas pelo bundler (uteis para diagnostico). */
 export const SOUND_URLS: Record<SoundId, string> = {
@@ -31,8 +25,6 @@ export const SOUND_URLS: Record<SoundId, string> = {
   connectionError: connectionErrorUrl,
   reconnected: reconnectedUrl
 }
-
-export const SOUND_IDS = Object.keys(SOUND_URLS) as SoundId[]
 
 /**
  * Volume dos sons do app. Fixo em 1.0 por decisao da SPEC: e independente do
