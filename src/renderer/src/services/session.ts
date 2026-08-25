@@ -1,0 +1,696 @@
+// Orquestrador da sessao: unico ponto que liga o reducer puro (core) as camadas
+// de transporte (peer-manager, mesh, reconnection, stats) e executa os EFEITOS
+// declarativos que o reducer emite.
+import type { DataConnection, MediaConnection } from 'peerjs'
+import {
+  ADMISSION_IDLE_TIMEOUT_MS,
+  JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS,
+  JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS,
+  JOIN_RESPONSE_TIMEOUT_MS,
+  OWNER_REBROADCAST_COUNT,
+  OWNER_REBROADCAST_INTERVAL_MS,
+  ROOM_DEFAULT_LIMIT,
+  ROOM_MAX_LIMIT,
+  ROOM_MIN_LIMIT
+} from '@shared/config'
+import {
+  createEnvelope,
+  validateEnvelope,
+  type JoinAcceptPayload,
+  type JoinRejectReason,
+  type PresetId,
+  type ProtocolMessage,
+  type RoomMeta,
+  type SourceKind,
+  type TxStopReason
+} from '@shared/protocol'
+import { admit } from '../core/admission'
+import { toPeerId, validateRoomCode } from '../core/room-code'
+import {
+  buildRosterUpdate,
+  createInitialState,
+  isOwner,
+  reduce,
+  type Effect,
+  type RoomEvent,
+  type RoomState,
+  type ToastTone
+} from '../core/room-state'
+import { Mesh } from './mesh'
+import { PeerManager, RoomCodeUnavailableError, SignalingError } from './peer-manager'
+import { ReconnectionManager } from './reconnection'
+import { StatsMonitor } from './stats-monitor'
+import { playSound } from './sound-player'
+
+export class JoinRejectedError extends Error {
+  readonly reason: JoinRejectReason
+
+  constructor(reason: JoinRejectReason) {
+    super(JOIN_REJECT_MESSAGES[reason])
+    this.name = 'JoinRejectedError'
+    this.reason = reason
+  }
+}
+
+export class RoomNotFoundError extends Error {
+  constructor() {
+    super('Sala nao encontrada.')
+    this.name = 'RoomNotFoundError'
+  }
+}
+
+export class JoinTimeoutError extends Error {
+  constructor() {
+    super('Sem resposta da sala.')
+    this.name = 'JoinTimeoutError'
+  }
+}
+
+export const JOIN_REJECT_MESSAGES: Record<JoinRejectReason, string> = {
+  room_full: 'Sala cheia.',
+  banned: 'Voce esta banido desta sala.',
+  version_mismatch: 'Atualize o app para entrar nesta sala.',
+  invalid_payload: 'Nao foi possivel entrar na sala.'
+}
+
+export interface Toast {
+  id: number
+  tone: ToastTone
+  text: string
+}
+
+/** Ganchos que o pipeline de midia (Sprint 5) registra na sessao. */
+export interface MediaHooks {
+  /** Um membro novo entrou: re-`call` se houver transmissao local ativa. */
+  onMemberJoined(peerId: string): void
+  /** Um par voltou de reconexao: re-`call` se houver transmissao local ativa. */
+  onPeerRecovered(peerId: string): void
+  /** Chamada de midia recebida no member peer. */
+  onIncomingCall(call: MediaConnection): void
+  /** Encerra a transmissao local (saida da sala, troca de fonte). */
+  stopLocal(reason: TxStopReason): void
+  /** Conexoes de ENTRADA para o monitor de qualidade. */
+  inboundConnections(): RTCPeerConnection[]
+  /** Libera tudo ao destruir a sessao. */
+  teardown(): void
+}
+
+export interface CreateRoomOptions {
+  code: string
+  limit: number
+}
+
+type StateListener = (state: RoomState) => void
+type ToastListener = (toast: Toast) => void
+
+const noopMediaHooks: MediaHooks = {
+  onMemberJoined: () => {},
+  onPeerRecovered: () => {},
+  onIncomingCall: (call) => call.close(),
+  stopLocal: () => {},
+  inboundConnections: () => [],
+  teardown: () => {}
+}
+
+export class Session {
+  private state: RoomState = createInitialState()
+  private nickname = ''
+  private installId = ''
+  private mediaHooks: MediaHooks = noopMediaHooks
+
+  private readonly stateListeners = new Set<StateListener>()
+  private readonly toastListeners = new Set<ToastListener>()
+  private readonly memberErrorListeners = new Set<(type: string, message: string) => void>()
+  private readonly rttByPeer = new Map<string, number>()
+
+  private toastSeq = 0
+  private rebroadcastTimer: ReturnType<typeof setInterval> | null = null
+  private quarantineTimer: ReturnType<typeof setInterval> | null = null
+
+  private readonly peerManager: PeerManager
+  private readonly mesh: Mesh
+  private readonly reconnection: ReconnectionManager
+  private readonly statsMonitor: StatsMonitor
+
+  constructor() {
+    this.peerManager = new PeerManager({
+      onMeshConnection: (connection) => this.handleIncomingMeshConnection(connection),
+      onDoorConnection: (connection) => this.handleDoorConnection(connection),
+      onCall: (call) => this.mediaHooks.onIncomingCall(call),
+      onSignalingChange: (connected) => {
+        if (!connected) {
+          this.emitToast('warning', 'Conexao com o servidor de sinalizacao caiu; reconectando...')
+        }
+      },
+      onMemberError: (type, message) => {
+        for (const listener of this.memberErrorListeners) listener(type, message)
+        if (type !== 'peer-unavailable') {
+          console.warn('[session] erro do member peer:', type, message)
+        }
+      }
+    })
+
+    this.mesh = new Mesh({
+      onMessage: (from, message) => this.handleMeshMessage(from, message),
+      onOpen: (peerId) => {
+        this.reconnection.markOpen(peerId)
+        this.dispatch({ kind: 'PEER_LINK_UP', peerId, now: Date.now() })
+        this.mediaHooks.onPeerRecovered(peerId)
+      },
+      onClose: (peerId) => this.reconnection.markClosed(peerId),
+      onInvalid: (from, reason) => {
+        console.warn(`[mesh] envelope descartado de ${from}: ${reason}`)
+      }
+    })
+
+    this.reconnection = new ReconnectionManager({
+      sendPing: (peerId, seq) => this.mesh.send(peerId, { type: 'PING', payload: { seq } }),
+      redial: (peerId) => this.redial(peerId),
+      onReconnecting: (peerId) =>
+        this.dispatch({ kind: 'PEER_LINK_RECONNECTING', peerId, now: Date.now() }),
+      onReconnectTimeout: (peerId) =>
+        this.dispatch({ kind: 'PEER_LINK_RECONNECT_TIMEOUT', peerId, now: Date.now() }),
+      onConnectFailed: (peerId) =>
+        this.dispatch({ kind: 'PEER_LINK_FAILED', peerId, now: Date.now() }),
+      onRtt: (peerId, rttMs) => this.rttByPeer.set(peerId, rttMs)
+    })
+
+    this.statsMonitor = new StatsMonitor({
+      inboundConnections: () => this.mediaHooks.inboundConnections(),
+      averageRttMs: () => this.averageRtt(),
+      onReport: (report) => {
+        if (this.state.phase !== 'active') return
+        this.dispatch({
+          kind: 'LOCAL_QUALITY',
+          level: report.level,
+          rttMs: report.rttMs,
+          inboundBitrateKbps: report.inboundBitrateKbps,
+          now: Date.now()
+        })
+      }
+    })
+  }
+
+  // --- API publica ---------------------------------------------------------
+
+  getState(): RoomState {
+    return this.state
+  }
+
+  get selfPeerId(): string {
+    return this.peerManager.memberPeerId
+  }
+
+  subscribe(listener: StateListener): () => void {
+    this.stateListeners.add(listener)
+    listener(this.state)
+    return () => this.stateListeners.delete(listener)
+  }
+
+  onToast(listener: ToastListener): () => void {
+    this.toastListeners.add(listener)
+    return () => this.toastListeners.delete(listener)
+  }
+
+  setMediaHooks(hooks: MediaHooks): void {
+    this.mediaHooks = hooks
+  }
+
+  setIdentity(nickname: string, installId: string): void {
+    this.nickname = nickname
+    this.installId = installId
+  }
+
+  /** Sobe o member peer (id aleatorio) e devolve o peerId aberto. */
+  async start(): Promise<string> {
+    const peerId = await this.peerManager.startMemberPeer()
+    this.mesh.setSelfPeerId(peerId)
+    return peerId
+  }
+
+  /** RF-01/RF-02/RF-04: cria a sala registrando o door peer com o codigo. */
+  async createRoom(options: CreateRoomOptions): Promise<void> {
+    const validation = validateRoomCode(options.code)
+    if (!validation.ok) throw new Error(`Codigo invalido: ${validation.error}`)
+    const limit = Math.min(ROOM_MAX_LIMIT, Math.max(ROOM_MIN_LIMIT, Math.round(options.limit)))
+
+    const selfPeerId = await this.start()
+    // Falha aqui com unavailable-id significa "codigo ja em uso" (RF-04).
+    await this.peerManager.openDoor(validation.code, 'create')
+
+    const roomMeta: RoomMeta = {
+      code: validation.code,
+      limit: Number.isFinite(limit) ? limit : ROOM_DEFAULT_LIMIT,
+      createdAt: Date.now()
+    }
+    this.dispatch({
+      kind: 'ROOM_CREATED',
+      roomMeta,
+      selfPeerId,
+      selfInstallId: this.installId,
+      nickname: this.nickname,
+      now: Date.now()
+    })
+    this.startBackgroundTimers()
+  }
+
+  /** RF-06: entra pelo codigo via canal efemero com o door peer do dono. */
+  async joinRoom(rawCode: string): Promise<void> {
+    const validation = validateRoomCode(rawCode)
+    if (!validation.ok) throw new Error(`Codigo invalido: ${validation.error}`)
+    const code = validation.code
+
+    const selfPeerId = await this.start()
+    const deadline = Date.now() + JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS
+
+    let accept: JoinAcceptPayload | null = null
+    for (;;) {
+      try {
+        accept = await this.requestJoin(code)
+        break
+      } catch (error) {
+        // Janela de indisponibilidade do id durante transferencia de posse (R5).
+        const unavailable = error instanceof RoomNotFoundError
+        if (!unavailable || Date.now() >= deadline) throw error
+        await new Promise((resolve) =>
+          setTimeout(resolve, JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS)
+        )
+      }
+    }
+
+    this.dispatch({
+      kind: 'ROOM_JOINED',
+      accept,
+      selfPeerId,
+      selfInstallId: this.installId,
+      now: Date.now()
+    })
+    this.startBackgroundTimers()
+
+    // Abre o mesh com CADA membro e se apresenta.
+    for (const member of accept.members) {
+      if (member.peerId === selfPeerId) continue
+      this.dial(member.peerId)
+      this.mesh.send(member.peerId, {
+        type: 'HELLO',
+        payload: { nickname: this.nickname, joinedAt: Date.now() }
+      })
+    }
+  }
+
+  leaveRoom(): void {
+    if (this.state.phase !== 'active') {
+      this.teardown()
+      return
+    }
+    this.dispatch({ kind: 'SELF_LEAVE', now: Date.now() })
+  }
+
+  kick(peerId: string): void {
+    this.dispatch({ kind: 'OWNER_REMOVE', peerId, mode: 'kick', now: Date.now() })
+  }
+
+  ban(peerId: string): void {
+    this.dispatch({ kind: 'OWNER_REMOVE', peerId, mode: 'ban', now: Date.now() })
+  }
+
+  updateNickname(nickname: string): void {
+    this.nickname = nickname.trim()
+    if (this.state.phase !== 'active') return
+    this.dispatch({ kind: 'LOCAL_NICKNAME', nickname: this.nickname, now: Date.now() })
+  }
+
+  watch(txId: string | null): void {
+    this.dispatch({ kind: 'LOCAL_WATCHING', txId, now: Date.now() })
+  }
+
+  /** Usado pelo media-manager (Sprint 5) para anunciar TX_START/TX_STOP. */
+  announceTransmissionStart(payload: {
+    txId: string
+    presetId: PresetId
+    hasAudio: boolean
+    sourceKind: SourceKind
+    sourceLabel: string
+  }): void {
+    this.dispatch({ kind: 'LOCAL_TX_START', ...payload, now: Date.now() })
+  }
+
+  announceTransmissionStop(reason: TxStopReason): void {
+    this.dispatch({ kind: 'LOCAL_TX_STOP', reason, now: Date.now() })
+  }
+
+  /** peerIds do roster, exceto o proprio (alvos de `call` e de broadcast). */
+  otherMemberPeerIds(): string[] {
+    return this.state.members
+      .map((member) => member.peerId)
+      .filter((peerId) => peerId !== this.state.selfPeerId)
+  }
+
+  sendTo(peerId: string, message: ProtocolMessage): void {
+    this.mesh.send(peerId, message)
+  }
+
+  // --- ingresso ------------------------------------------------------------
+
+  private requestJoin(code: string): Promise<JoinAcceptPayload> {
+    return new Promise<JoinAcceptPayload>((resolve, reject) => {
+      let settled = false
+      const connection = this.peerManager.connectToDoor(code)
+
+      const finish = (action: () => void): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        this.memberErrorListeners.delete(onMemberError)
+        connection.close()
+        action()
+      }
+
+      const timeout = setTimeout(() => {
+        finish(() => reject(new JoinTimeoutError()))
+      }, JOIN_RESPONSE_TIMEOUT_MS)
+
+      const onMemberError = (type: string): void => {
+        if (type !== 'peer-unavailable') return
+        finish(() => reject(new RoomNotFoundError()))
+      }
+      this.memberErrorListeners.add(onMemberError)
+
+      connection.on('open', () => {
+        connection.send(
+          createEnvelope(
+            'JOIN_REQUEST',
+            {
+              nickname: this.nickname,
+              memberPeerId: this.peerManager.memberPeerId,
+              installId: this.installId
+            },
+            this.peerManager.memberPeerId,
+            Date.now()
+          )
+        )
+      })
+
+      connection.on('data', (raw: unknown) => {
+        // O candidato so aceita respostas do door ao qual ELE se conectou (5c).
+        const result = validateEnvelope(raw, connection.peer)
+        if (!result.ok) return
+        if (result.message.type === 'JOIN_ACCEPT') {
+          const accept = result.message.payload
+          finish(() => resolve(accept))
+          return
+        }
+        if (result.message.type === 'JOIN_REJECT') {
+          const reason = result.message.payload.reason
+          finish(() => reject(new JoinRejectedError(reason)))
+        }
+      })
+
+      connection.on('close', () => {
+        finish(() => reject(new JoinTimeoutError()))
+      })
+
+      connection.on('error', () => {
+        finish(() => reject(new RoomNotFoundError()))
+      })
+    })
+  }
+
+  /** Lado do DONO: canal efemero de admissao, so aceita JOIN_REQUEST (5c). */
+  private handleDoorConnection(connection: DataConnection): void {
+    const idleTimer = setTimeout(() => {
+      console.warn('[door] candidato nao enviou JOIN_REQUEST; fechando canal')
+      connection.close()
+    }, ADMISSION_IDLE_TIMEOUT_MS)
+
+    const closeSoon = (): void => {
+      clearTimeout(idleTimer)
+      setTimeout(() => connection.close(), 250)
+    }
+
+    connection.on('data', (raw: unknown) => {
+      clearTimeout(idleTimer)
+      const roomMeta = this.state.roomMeta
+      if (!isOwner(this.state) || !roomMeta) {
+        connection.close()
+        return
+      }
+
+      // O candidato valida a resposta contra o peerId do DOOR, que e o peer ao
+      // qual ELE se conectou (matriz 5c), nao contra o member peer do dono.
+      const doorPeerId = toPeerId(roomMeta.code)
+
+      const decision = admit(raw, {
+        roomMeta,
+        rosterVersion: this.state.rosterVersion,
+        ownerPeerId: this.state.selfPeerId,
+        members: this.state.members,
+        banList: this.state.banList,
+        now: Date.now()
+      })
+
+      if ('reject' in decision) {
+        connection.send(createEnvelope('JOIN_REJECT', decision.reject, doorPeerId, Date.now()))
+        closeSoon()
+        return
+      }
+
+      // Identidade cruzada: o memberPeerId declarado tem que ser o peerId REAL
+      // da conexao de admissao, senao o candidato poderia se passar por outro.
+      if (decision.member.peerId !== connection.peer) {
+        connection.send(
+          createEnvelope('JOIN_REJECT', { reason: 'invalid_payload' }, doorPeerId, Date.now())
+        )
+        closeSoon()
+        return
+      }
+
+      connection.send(createEnvelope('JOIN_ACCEPT', decision.accept, doorPeerId, Date.now()))
+      this.dispatch({
+        kind: 'OWNER_ADMIT',
+        member: decision.member,
+        members: decision.accept.members,
+        rosterVersion: decision.accept.rosterVersion,
+        now: Date.now()
+      })
+      this.reconnection.track(decision.member.peerId)
+      this.mediaHooks.onMemberJoined(decision.member.peerId)
+      closeSoon()
+    })
+
+    connection.on('close', () => clearTimeout(idleTimer))
+    connection.on('error', () => clearTimeout(idleTimer))
+  }
+
+  // --- mesh ----------------------------------------------------------------
+
+  private handleIncomingMeshConnection(connection: DataConnection): void {
+    this.mesh.attach(connection, 'incoming')
+  }
+
+  private dial(peerId: string): void {
+    if (this.mesh.isOpen(peerId)) return
+    this.reconnection.track(peerId)
+    try {
+      this.mesh.attach(this.peerManager.connectToMember(peerId), 'outgoing')
+    } catch (error) {
+      console.warn(`[session] nao foi possivel discar para ${peerId}:`, error)
+    }
+  }
+
+  private redial(peerId: string): void {
+    const stillInRoster = this.state.members.some((member) => member.peerId === peerId)
+    if (!stillInRoster || this.state.phase !== 'active') {
+      this.reconnection.untrack(peerId)
+      return
+    }
+    this.mesh.close(peerId)
+    try {
+      this.mesh.attach(this.peerManager.connectToMember(peerId), 'outgoing')
+    } catch (error) {
+      console.warn(`[session] nao foi possivel rediscar para ${peerId}:`, error)
+    }
+  }
+
+  private handleMeshMessage(from: string, message: ProtocolMessage): void {
+    // Heartbeat nao passa pelo reducer: e puro transporte.
+    if (message.type === 'PING') {
+      if (this.state.members.some((member) => member.peerId === from)) {
+        this.mesh.send(from, { type: 'PONG', payload: { seq: message.payload.seq } })
+      }
+      return
+    }
+    if (message.type === 'PONG') {
+      this.reconnection.handlePong(from, message.payload.seq)
+      return
+    }
+    this.dispatch({ kind: 'MESSAGE', from, message, now: Date.now() })
+  }
+
+  // --- reducer e efeitos ---------------------------------------------------
+
+  dispatch(event: RoomEvent): void {
+    const previousMembers = this.state.members.map((member) => member.peerId)
+    const result = reduce(this.state, event)
+    this.state = result.state
+    this.runEffects(result.effects)
+
+    // Membros novos no roster: abrir mesh e avisar a midia (re-call, RF-22).
+    const joined = this.state.members
+      .map((member) => member.peerId)
+      .filter(
+        (peerId) => peerId !== this.state.selfPeerId && !previousMembers.includes(peerId)
+      )
+    for (const peerId of joined) {
+      this.dial(peerId)
+      this.mediaHooks.onMemberJoined(peerId)
+    }
+
+    this.notify()
+  }
+
+  private runEffects(effects: readonly Effect[]): void {
+    for (const effect of effects) {
+      switch (effect.kind) {
+        case 'playSound':
+          playSound(effect.sound)
+          break
+        case 'showToast':
+          this.emitToast(effect.tone, effect.text)
+          break
+        case 'send':
+          this.mesh.send(effect.to, effect.message)
+          break
+        case 'broadcast':
+          this.mesh.broadcast(effect.message)
+          break
+        case 'closeConnection':
+          this.mesh.close(effect.peerId)
+          this.reconnection.untrack(effect.peerId)
+          this.rttByPeer.delete(effect.peerId)
+          break
+        case 'log':
+          if (effect.level === 'warn') console.warn('[room]', effect.text)
+          else console.info('[room]', effect.text)
+          break
+        case 'assumeOwnership':
+          void this.assumeOwnership(effect.rebroadcast)
+          break
+        case 'scheduleRedial':
+          this.reconnection.enableBackgroundRetry(effect.peerId)
+          break
+        case 'stopLocalTransmission':
+          this.mediaHooks.stopLocal(effect.reason)
+          break
+        case 'destroySession':
+          setTimeout(() => this.teardown(), 300)
+          break
+      }
+    }
+  }
+
+  private async assumeOwnership(rebroadcast: boolean): Promise<void> {
+    const code = this.state.roomMeta?.code
+    if (!code) return
+    if (!this.peerManager.hasDoor) {
+      try {
+        // Sempre "takeover": o id do dono anterior leva alguns segundos para ser
+        // liberado pelo servidor PeerJS (risco R5). O modo "create" so aparece em
+        // `createRoom`, onde `unavailable-id` significa mesmo "codigo em uso".
+        await this.peerManager.openDoor(code, 'takeover')
+      } catch (error) {
+        if (error instanceof RoomCodeUnavailableError || error instanceof SignalingError) {
+          console.warn('[session] nao foi possivel registrar o door peer:', error.message)
+          this.emitToast(
+            'warning',
+            'A sala segue funcionando, mas novas entradas podem falhar por alguns segundos.'
+          )
+          return
+        }
+        throw error
+      }
+    }
+    if (rebroadcast) this.startOwnerRebroadcast()
+  }
+
+  /**
+   * Re-emite o primeiro ROSTER_UPDATE do dono eleito a cada 5s, ate 3 vezes, para
+   * que membros cujos timers de 15s expiram depois convirjam (secao 2.7).
+   */
+  private startOwnerRebroadcast(): void {
+    this.stopOwnerRebroadcast()
+    let remaining = OWNER_REBROADCAST_COUNT
+    this.rebroadcastTimer = setInterval(() => {
+      if (remaining <= 0 || !isOwner(this.state) || this.state.phase !== 'active') {
+        this.stopOwnerRebroadcast()
+        return
+      }
+      remaining -= 1
+      this.mesh.broadcast({
+        type: 'ROSTER_UPDATE',
+        payload: buildRosterUpdate(this.state, {
+          kind: 'transfer',
+          targetPeerId: this.state.selfPeerId
+        })
+      })
+    }, OWNER_REBROADCAST_INTERVAL_MS)
+  }
+
+  private stopOwnerRebroadcast(): void {
+    if (this.rebroadcastTimer === null) return
+    clearInterval(this.rebroadcastTimer)
+    this.rebroadcastTimer = null
+  }
+
+  // --- infra ---------------------------------------------------------------
+
+  private startBackgroundTimers(): void {
+    this.statsMonitor.start()
+    if (this.quarantineTimer === null) {
+      this.quarantineTimer = setInterval(() => {
+        if (this.state.pendingHellos.length === 0) return
+        this.dispatch({ kind: 'HELLO_QUARANTINE_TICK', now: Date.now() })
+      }, 1_000)
+    }
+  }
+
+  private averageRtt(): number {
+    if (this.rttByPeer.size === 0) return 0
+    let total = 0
+    for (const rtt of this.rttByPeer.values()) total += rtt
+    return total / this.rttByPeer.size
+  }
+
+  private emitToast(tone: ToastTone, text: string): void {
+    this.toastSeq += 1
+    const toast: Toast = { id: this.toastSeq, tone, text }
+    for (const listener of this.toastListeners) listener(toast)
+  }
+
+  private notify(): void {
+    for (const listener of this.stateListeners) listener(this.state)
+  }
+
+  teardown(): void {
+    this.stopOwnerRebroadcast()
+    if (this.quarantineTimer !== null) {
+      clearInterval(this.quarantineTimer)
+      this.quarantineTimer = null
+    }
+    this.statsMonitor.stop()
+    this.reconnection.destroy()
+    this.mediaHooks.teardown()
+    this.mesh.closeAll()
+    this.peerManager.destroy()
+    this.rttByPeer.clear()
+  }
+
+  /** Reinicia o estado para voltar a Home apos sair/ser removido. */
+  reset(): void {
+    this.teardown()
+    this.state = createInitialState()
+    this.notify()
+  }
+}
+
+export const session = new Session()

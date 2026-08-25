@@ -2,6 +2,7 @@
 // Serve para exercitar a superficie IPC e os sons sem UI definitiva.
 import { useEffect, useState } from 'react'
 import type { CaptureSource } from '@shared/ipc'
+import { Session, session } from './services/session'
 import {
   playSound,
   preloadSounds,
@@ -45,7 +46,9 @@ export default function App(): JSX.Element {
     ;(window as unknown as Record<string, unknown>)['__zoiHarness'] = {
       soundIds: SOUND_IDS,
       soundUrls: SOUND_URLS,
-      playSound
+      playSound,
+      session,
+      createSession: (): Session => new Session()
     }
     void window.zoi.settings.get().then((settings) => {
       setInstallId(settings.installId)

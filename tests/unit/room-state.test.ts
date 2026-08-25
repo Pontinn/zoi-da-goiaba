@@ -597,6 +597,48 @@ describe('room-state / queda do dono e regra de handover (secao 2.7)', () => {
     expect(result.state.members.map((entry) => entry.peerId)).toEqual(['me', 'c'])
   })
 
+  it('aceita o handover tambem com o link do dono em unreachable (condicao b)', () => {
+    const state = joinedState('c', roster, 'owner', 5)
+    const failed = reduce(state, { kind: 'PEER_LINK_FAILED', peerId: 'owner', now: 1_000 }).state
+    expect(failed.peerLinks['owner']?.status).toBe('unreachable')
+    const result = reduce(failed, {
+      kind: 'MESSAGE',
+      from: 'me',
+      now: 2_000,
+      message: {
+        type: 'ROSTER_UPDATE',
+        payload: rosterUpdate({
+          rosterVersion: 6,
+          ownerPeerId: 'me',
+          members: [member('me', 5, true), member('c', 9)],
+          lastChange: { kind: 'transfer', targetPeerId: 'me' }
+        })
+      }
+    })
+    expect(result.state.ownerPeerId).toBe('me')
+  })
+
+  it('REJEITA handover enquanto o link com o dono ainda esta apenas "connecting"', () => {
+    const state = joinedState('c', roster, 'owner', 5)
+    expect(state.peerLinks['owner']?.status).toBe('connecting')
+    const result = reduce(state, {
+      kind: 'MESSAGE',
+      from: 'me',
+      now: 2_000,
+      message: {
+        type: 'ROSTER_UPDATE',
+        payload: rosterUpdate({
+          rosterVersion: 6,
+          ownerPeerId: 'me',
+          members: [member('me', 5, true), member('c', 9)],
+          lastChange: { kind: 'transfer', targetPeerId: 'me' }
+        })
+      }
+    })
+    expect(result.state.ownerPeerId).toBe('owner')
+    expect(kinds(result.effects)).toEqual(['log'])
+  })
+
   it('REJEITA takeover forjado com o dono SAUDAVEL (condicao b)', () => {
     const state = joinedState('c', roster, 'owner', 5)
     const healthy = reduce(state, { kind: 'PEER_LINK_UP', peerId: 'owner', now: 900 }).state
@@ -829,24 +871,73 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
     const state = ownerState([member('owner', 1, true), member('b', 5), member('c', 2)], 5)
     const result = reduce(state, { kind: 'SELF_LEAVE', now: 1_000 })
     const messages = broadcasts(result.effects)
-    expect(messages[0]).toMatchObject({
-      type: 'ROSTER_UPDATE',
-      payload: { ownerPeerId: 'c', lastChange: { kind: 'transfer', targetPeerId: 'c' } }
-    })
-    expect(messages[1]).toEqual({
-      type: 'OWNER_TRANSFER',
-      payload: { newOwnerPeerId: 'c', rosterVersion: 6 }
-    })
-    expect(messages[2]).toEqual({ type: 'LEAVE', payload: {} })
+    // OWNER_TRANSFER vai imediatamente antes do LEAVE (tabela 5.A).
+    expect(messages).toEqual([
+      { type: 'OWNER_TRANSFER', payload: { newOwnerPeerId: 'c', rosterVersion: 6 } },
+      { type: 'LEAVE', payload: {} }
+    ])
     expect(result.state.phase).toBe('ended')
     expect(result.state.endReason).toBe('left')
   })
 
-  it('SELF_LEAVE do dono leva a ban list junto no snapshot (RF-36)', () => {
-    const base = ownerState([member('owner', 1, true), member('b', 5)], 5)
-    const state: RoomState = { ...base, banList: [{ installId: 'i-x', nickname: 'X' }] }
-    const result = reduce(state, { kind: 'SELF_LEAVE', now: 1_000 })
-    expect(broadcasts(result.effects)[0]).toMatchObject({
+  it('o sucessor assume ao receber OWNER_TRANSFER e remove o ex-dono no LEAVE', () => {
+    const state = joinedState('c', [member('owner', 1, true), member('b', 5), member('c', 2)], 'owner', 5)
+    const transferred = reduce(state, {
+      kind: 'MESSAGE',
+      from: 'owner',
+      now: 1_000,
+      message: {
+        type: 'OWNER_TRANSFER',
+        payload: { newOwnerPeerId: 'c', rosterVersion: 6 }
+      }
+    })
+    expect(transferred.state.ownerPeerId).toBe('c')
+    expect(transferred.state.rosterVersion).toBe(6)
+    expect(kinds(transferred.effects)).toContain('assumeOwnership')
+
+    const left = reduce(transferred.state, {
+      kind: 'MESSAGE',
+      from: 'owner',
+      now: 1_100,
+      message: { type: 'LEAVE', payload: {} }
+    })
+    expect(left.state.members.map((entry) => entry.peerId).sort()).toEqual(['b', 'c'])
+    expect(broadcasts(left.effects)[0]).toMatchObject({
+      type: 'ROSTER_UPDATE',
+      payload: { ownerPeerId: 'c', lastChange: { kind: 'leave', targetPeerId: 'owner' } }
+    })
+  })
+
+  it('o sucessor ja carrega a ban list replicada (RF-36)', () => {
+    const state = joinedState('c', [member('owner', 1, true), member('c', 2)], 'owner', 5)
+    const withBan = reduce(state, {
+      kind: 'MESSAGE',
+      from: 'owner',
+      now: 900,
+      message: {
+        type: 'ROSTER_UPDATE',
+        payload: rosterUpdate({
+          rosterVersion: 6,
+          members: [member('owner', 1, true), member('c', 2)],
+          banList: [{ installId: 'i-x', nickname: 'X' }],
+          lastChange: { kind: 'ban', targetPeerId: 'x' }
+        })
+      }
+    }).state
+    const transferred = reduce(withBan, {
+      kind: 'MESSAGE',
+      from: 'owner',
+      now: 1_000,
+      message: { type: 'OWNER_TRANSFER', payload: { newOwnerPeerId: 'c', rosterVersion: 7 } }
+    })
+    expect(transferred.state.banList).toEqual([{ installId: 'i-x', nickname: 'X' }])
+    const left = reduce(transferred.state, {
+      kind: 'MESSAGE',
+      from: 'owner',
+      now: 1_100,
+      message: { type: 'LEAVE', payload: {} }
+    })
+    expect(broadcasts(left.effects)[0]).toMatchObject({
       payload: { banList: [{ installId: 'i-x', nickname: 'X' }] }
     })
   })

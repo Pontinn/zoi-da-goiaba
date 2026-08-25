@@ -708,23 +708,32 @@ function applyHello(
  * Regra de handover da secao 2.7: um ROSTER_UPDATE de quem NAO e o dono local so
  * e aceito com as tres condicoes cumulativas.
  */
-export function isAcceptableHandover(
+export type HandoverRejection = 'no_owner' | 'not_winner' | 'owner_healthy' | 'stale_version'
+
+export function checkHandover(
   state: RoomState,
   from: string,
   payload: RosterUpdatePayload
-): boolean {
-  if (state.ownerPeerId === null) return false
+): HandoverRejection | null {
+  if (state.ownerPeerId === null) return 'no_owner'
   // (a) remetente e o vencedor deterministico sobre o roster local sem o dono atual
   const winner = electOwnerExcluding(state.members, state.ownerPeerId)
-  if (!winner || winner.peerId !== from) return false
+  if (!winner || winner.peerId !== from) return 'not_winner'
   // (c) rosterVersion estritamente maior que a local
-  if (payload.rosterVersion <= state.rosterVersion) return false
+  if (payload.rosterVersion <= state.rosterVersion) return 'stale_version'
 
-  // (b) o link com o dono atual nao esta saudavel.
+  // (b) o link com o dono atual nao esta saudavel: `reconnecting` e `timeout` sao
+  // os estados citados na SPEC; `unreachable` entra pelo mesmo criterio de "nao
+  // saudavel" (a janela de 15s ja se esgotou ou o link nunca fechou). `connecting`
+  // NAO entra: e o estado normal de quem acabou de ingressar.
   if (state.ownerPeerId !== state.selfPeerId) {
     const ownerLink = state.peerLinks[state.ownerPeerId]
-    if (!ownerLink) return false
-    return ownerLink.status === 'reconnecting' || ownerLink.status === 'timeout'
+    if (!ownerLink) return 'owner_healthy'
+    const unhealthy =
+      ownerLink.status === 'reconnecting' ||
+      ownerLink.status === 'timeout' ||
+      ownerLink.status === 'unreachable'
+    return unhealthy ? null : 'owner_healthy'
   }
 
   // Caso do EX-DONO que volta de uma queda propria (Sprint 4, edge case): nao ha
@@ -732,12 +741,21 @@ export function isAcceptableHandover(
   // nenhum outro link de membro alem do remetente esta saudavel. Com o dono
   // realmente ativo e a sala conectada, os demais links estao "up" e o takeover
   // forjado continua barrado.
-  return !state.members.some(
+  const isolated = !state.members.some(
     (candidate) =>
       candidate.peerId !== state.selfPeerId &&
       candidate.peerId !== from &&
       state.peerLinks[candidate.peerId]?.status === 'up'
   )
+  return isolated ? null : 'owner_healthy'
+}
+
+export function isAcceptableHandover(
+  state: RoomState,
+  from: string,
+  payload: RosterUpdatePayload
+): boolean {
+  return checkHandover(state, from, payload) === null
 }
 
 function applyRosterUpdate(
@@ -758,14 +776,15 @@ function applyRosterUpdate(
         ]
       }
     }
-    if (!isAcceptableHandover(state, from, payload)) {
+    const rejection = checkHandover(state, from, payload)
+    if (rejection) {
       return {
         state,
         effects: [
           {
             kind: 'log',
             level: 'warn',
-            text: `ROSTER_UPDATE de nao-dono (${from}) rejeitado: handover invalido`
+            text: `ROSTER_UPDATE de nao-dono (${from}) rejeitado: ${rejection} (dono local ${state.ownerPeerId}, link ${state.peerLinks[state.ownerPeerId ?? '']?.status ?? 'ausente'}, v${payload.rosterVersion} vs v${state.rosterVersion})`
           }
         ]
       }
@@ -1395,33 +1414,17 @@ function applySelfLeave(state: RoomState): ReducerResult {
   if (isOwner(state)) {
     const successor = electOwnerExcluding(state.members, state.selfPeerId)
     if (successor) {
-      // RF-35/RF-36: posse e ban list migram para o mais antigo.
-      const handedOver: RoomState = {
-        ...state,
-        rosterVersion: state.rosterVersion + 1,
-        ownerPeerId: successor.peerId,
-        members: markOwner(
-          state.members.filter((member) => member.peerId !== state.selfPeerId),
-          successor.peerId
-        )
-      }
-      effects.push({
-        kind: 'broadcast',
-        message: {
-          type: 'ROSTER_UPDATE',
-          payload: buildRosterUpdate(handedOver, {
-            kind: 'transfer',
-            targetPeerId: successor.peerId
-          })
-        }
-      })
+      // RF-35: OWNER_TRANSFER vai imediatamente antes do LEAVE. Quem remove o
+      // dono que saiu do roster e o NOVO dono, ao receber o LEAVE em seguida.
+      // A ban list (RF-36) ja esta replicada em todos pelos ROSTER_UPDATE
+      // anteriores, entao o sucessor assume com ela na mao.
       effects.push({
         kind: 'broadcast',
         message: {
           type: 'OWNER_TRANSFER',
           payload: {
             newOwnerPeerId: successor.peerId,
-            rosterVersion: handedOver.rosterVersion
+            rosterVersion: state.rosterVersion + 1
           }
         }
       })
