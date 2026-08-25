@@ -21,6 +21,8 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "electron-vite build && playwright test",
+    "test:e2e:watchme": "electron-vite build && node scripts/e2e-watchme.mjs",
     "icon": "node scripts/generate-icon.mjs",
     "dist": "electron-vite build && electron-builder --win --publish never"
   },
@@ -29,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@playwright/test": "1.62.1",
     "@types/node": "22.20.1",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",

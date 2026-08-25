@@ -1,0 +1,106 @@
+// Sprint 10, item 6 da SPEC: sessao completa de ponta a ponta entre DUAS
+// instancias reais do app na mesma maquina, contra o servidor PUBLICO do PeerJS.
+//
+// Roteiro: A abre pela primeira vez e cria a sala, B entra pelo codigo, os dois
+// veem o mesmo roster, A transmite um monitor de verdade, B ve a miniatura ao
+// vivo e abre o player, A para, a grade de B esvazia, B sai, A sai.
+//
+// Os asserts sao de UI (presenca e texto), como manda a SPEC: qualidade de
+// video e audio ficam no checklist manual.
+import { expect, test } from '@playwright/test'
+import {
+  closeInstance,
+  createRoom,
+  expectRoster,
+  joinRoom,
+  launchInstance,
+  leaveRoom,
+  signalingIsReachable,
+  startTransmission,
+  stopTransmission,
+  TIMEOUTS,
+  uniqueRoomCode,
+  wakePlayerControls,
+  type ZoiInstance
+} from './helpers/zoi-app'
+
+const OWNER = 'Pontin'
+const GUEST = 'Bruna'
+
+test.describe('smoke de sessao (2 instancias)', () => {
+  let owner: ZoiInstance | null = null
+  let guest: ZoiInstance | null = null
+
+  test.beforeAll(async () => {
+    test.skip(
+      !(await signalingIsReachable()),
+      'servidor publico do PeerJS (0.peerjs.com) inacessivel: sem sinalizacao nao ha sala para testar'
+    )
+  })
+
+  test.afterEach(async () => {
+    await closeInstance(guest)
+    await closeInstance(owner)
+    guest = null
+    owner = null
+  })
+
+  test('cria sala, entra pelo codigo, transmite, assiste e sai', async () => {
+    const code = uniqueRoomCode()
+
+    // 1. Duas instancias isoladas, cada uma passando pela primeira execucao.
+    owner = await launchInstance('A', OWNER)
+    guest = await launchInstance('B', GUEST)
+
+    // 2. Sala criada pelo dono com codigo personalizado unico da execucao.
+    await createRoom(owner, code)
+    await expectRoster(owner, [OWNER])
+
+    // 3. Ingresso pelo codigo (digitado em maiusculas, AC-29).
+    await joinRoom(guest, code)
+
+    // 4. Roster identico e sincronizado nos dois lados (RF-14).
+    await expectRoster(owner, [OWNER, GUEST])
+    await expectRoster(guest, [OWNER, GUEST])
+    await expect(guest.page.getByTestId('room-code')).toHaveText(code)
+
+    // 5. Antes de qualquer transmissao, a grade mostra o estado vazio.
+    await expect(guest.page.getByTestId('stream-thumb')).toHaveCount(0)
+    await expect(guest.page.getByText('Ninguem esta transmitindo ainda')).toBeVisible()
+
+    // 6. Transmissao real de um monitor, com fonte escolhida pelo seletor.
+    await startTransmission(owner, { presetId: 'p720_30', withAudio: false })
+    await expect(owner.page.getByTestId('transmitting-bar')).toContainText('720p30')
+
+    // 7. O espectador recebe a transmissao e o card do dono fica "ao vivo".
+    const guestThumb = guest.page.getByTestId('stream-thumb')
+    await expect(guestThumb).toHaveCount(1, { timeout: TIMEOUTS.media })
+    await expect(guestThumb.first()).toContainText(OWNER)
+
+    // 8. Clicar na miniatura abre o player com a mesma transmissao.
+    await guestThumb.first().click()
+    await expect(guest.page.getByTestId('player')).toBeVisible({ timeout: TIMEOUTS.media })
+    await expect(guest.page.getByTestId('player-preset')).toHaveText('720p30')
+
+    // 9. Controles somem sozinhos sem atividade e voltam ao mexer o mouse
+    //    (RNF-07). O auto-hide e por classe, o elemento continua no DOM.
+    const controls = guest.page.getByTestId('player-controls')
+    await expect(controls).toHaveAttribute('data-visible', 'false', { timeout: 20_000 })
+    await wakePlayerControls(guest)
+
+    // 10. Voltar do player para a grade nao derruba a transmissao.
+    await guest.page.getByTestId('player-back').click()
+    await expect(guest.page.getByTestId('player')).toHaveCount(0)
+    await expect(guestThumb).toHaveCount(1)
+
+    // 11. O dono encerra: a grade do espectador esvazia (RF-20).
+    await stopTransmission(owner)
+    await expect(guestThumb).toHaveCount(0, { timeout: TIMEOUTS.media })
+    await expect(guest.page.getByText('Ninguem esta transmitindo ainda')).toBeVisible()
+
+    // 12. Saida limpa dos dois lados.
+    await leaveRoom(guest)
+    await expectRoster(owner, [OWNER])
+    await leaveRoom(owner)
+  })
+})

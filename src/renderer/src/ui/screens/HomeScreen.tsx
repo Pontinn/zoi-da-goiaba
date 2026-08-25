@@ -130,6 +130,7 @@ export function HomeScreen(): JSX.Element {
               style={{ '--z-delay': '60ms' } as CSSProperties}
               onMouseMove={trackPointer}
               onClick={() => setRoute('create')}
+              data-testid="home-create"
             >
               <span className="z-action__ring" aria-hidden="true" />
               <span className="z-action__inner">
@@ -149,6 +150,7 @@ export function HomeScreen(): JSX.Element {
               style={{ '--z-delay': '120ms' } as CSSProperties}
               onMouseMove={trackPointer}
               onClick={() => setRoute('join')}
+              data-testid="home-join"
             >
               <span className="z-action__ring" aria-hidden="true" />
               <span className="z-action__inner">
