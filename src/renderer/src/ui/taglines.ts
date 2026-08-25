@@ -50,7 +50,8 @@ export const HOME_TAGLINES: readonly string[] = [
   '"Gente, que cor que é essa? Azul ou verde?" - Pontin, Leo',
   '"Não gosto de católicos" - Filho, Romilson',
   'pipipi, pópópó',
-  'Filmes eróticos só depois das 00h. Entrada somente com identificação'
+  'Filmes eróticos só depois das 00h. Entrada somente com identificação',
+  '"Nossa, meu namoado é um gato" - Caroliny, Bruna'
 ]
 
 function pick(list: readonly string[], random: () => number): string {
