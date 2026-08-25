@@ -10,6 +10,8 @@ import { session, type SessionHealth } from '../services/session'
 export interface RoomStore {
   room: RoomState
   streams: ReadonlyMap<string, MediaStream>
+  /** txIds cuja midia foi anunciada e nunca chegou (conexao direta falhou). */
+  mediaFailures: ReadonlySet<string>
   localTx: LocalTransmission | null
   /** Saude do transporte (sinalizacao e porta da sala), fora do RoomState. */
   health: SessionHealth
@@ -22,6 +24,7 @@ export interface RoomStore {
 export const useRoomStore = create<RoomStore>(() => ({
   room: createInitialState(),
   streams: new Map(),
+  mediaFailures: new Set(),
   localTx: null,
   health: session.getHealth(),
   qualityTick: 0,
@@ -60,6 +63,10 @@ export function attachRoomStore(): () => void {
     useRoomStore.setState({ streams, localTx: mediaManager.getLocalTransmission() })
   })
 
+  const unsubscribeFailures = mediaManager.subscribeMediaFailures((mediaFailures) => {
+    useRoomStore.setState({ mediaFailures })
+  })
+
   const unsubscribeHealth = session.onHealth((health) => {
     useRoomStore.setState({ health })
   })
@@ -71,6 +78,7 @@ export function attachRoomStore(): () => void {
   return () => {
     unsubscribeSession()
     unsubscribeStreams()
+    unsubscribeFailures()
     unsubscribeHealth()
     clearInterval(tick)
   }

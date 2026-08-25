@@ -31,12 +31,14 @@ import {
   buildRosterUpdate,
   createInitialState,
   isOwner,
+  nicknameOf,
   reduce,
   type Effect,
   type RoomEvent,
   type RoomState,
   type ToastTone
 } from '../core/room-state'
+import { describeConnectionState, observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { Mesh } from './mesh'
 import {
   PeerManager,
@@ -449,6 +451,19 @@ export class Session {
     return this.peerManager.call(peerId, stream, metadata)
   }
 
+  /**
+   * A midia de um par foi anunciada e atendida, mas nunca chegou: sem TURN
+   * (RF-42) a conexao direta entre as duas redes pode simplesmente nao subir.
+   * O espectador precisa saber disso, senao so ve um retangulo preto.
+   */
+  notifyMediaFailure(txId: string, peerId: string): void {
+    console.warn(`[media] a transmissao ${txId} de ${peerId} nao chegou ate aqui`)
+    this.emitToast(
+      'warning',
+      `O video de ${nicknameOf(this.state, peerId)} nao chegou ate voce. A conexao direta entre as redes falhou.`
+    )
+  }
+
   // --- ingresso ------------------------------------------------------------
 
   private requestJoin(code: string): Promise<JoinAcceptPayload> {
@@ -459,6 +474,7 @@ export class Session {
       let doorMissing = false
       const doorId = toPeerId(code)
       const connection = this.peerManager.connectToDoor(code)
+      const disposeIce = observePeerJsIce(connection, `join-out:${doorId}`)
 
       // Duas falhas MUITO diferentes que antes viravam a mesma frase: a porta
       // nao existe (codigo errado, dono saiu, registro perdido) ou a porta
@@ -467,7 +483,7 @@ export class Session {
         if (opened) return new JoinTimeoutError()
         if (doorMissing) return new RoomNotFoundError()
         console.warn(
-          `[session] a porta ${doorId} nao respondeu ${JOIN_RESPONSE_TIMEOUT_MS}ms sem 'peer-unavailable': o id existe na sinalizacao e a conexao e que nao completou`
+          `[ice join-out:${doorId}] a porta nao respondeu ${JOIN_RESPONSE_TIMEOUT_MS}ms sem 'peer-unavailable': o id existe na sinalizacao e a conexao e que nao completou (${describeConnectionState(connection)})`
         )
         return new RoomUnreachableError()
       }
@@ -476,6 +492,7 @@ export class Session {
         if (settled) return
         settled = true
         clearTimeout(timeout)
+        disposeIce()
         this.memberErrorListeners.delete(onMemberError)
         connection.close()
         action()
@@ -543,15 +560,34 @@ export class Session {
 
   /** Lado do DONO: canal efemero de admissao, so aceita JOIN_REQUEST (5c). */
   private handleDoorConnection(connection: DataConnection): void {
+    const tag = `door-in:${shortPeerId(connection.peer)}`
+    const disposeIce = observePeerJsIce(connection, tag)
+    // A oferta de admissao chega pela SINALIZACAO: este log sai mesmo quando o
+    // ICE nunca fecha, e e ele que separa "ninguem tentou entrar" de "tentou e
+    // a conexao direta nao subiu".
+    console.info(`[ice ${tag}] pedido de admissao chegou pela sinalizacao`)
+
     const idleTimer = setTimeout(() => {
-      console.warn('[door] candidato nao enviou JOIN_REQUEST; fechando canal')
+      if (connection.open) {
+        console.warn(`[ice ${tag}] candidato nao enviou JOIN_REQUEST; fechando canal`)
+      } else {
+        console.warn(
+          `[ice ${tag}] o canal de admissao nunca abriu em ${ADMISSION_IDLE_TIMEOUT_MS}ms: a oferta chegou pela sinalizacao e o ICE nao fechou (${describeConnectionState(connection)})`
+        )
+      }
+      disposeIce()
       connection.close()
     }, ADMISSION_IDLE_TIMEOUT_MS)
 
     const closeSoon = (): void => {
       clearTimeout(idleTimer)
+      disposeIce()
       setTimeout(() => connection.close(), 250)
     }
+
+    connection.on('open', () => {
+      console.info(`[ice ${tag}] canal de admissao aberto`)
+    })
 
     connection.on('data', (raw: unknown) => {
       clearTimeout(idleTimer)
@@ -603,8 +639,14 @@ export class Session {
       closeSoon()
     })
 
-    connection.on('close', () => clearTimeout(idleTimer))
-    connection.on('error', () => clearTimeout(idleTimer))
+    connection.on('close', () => {
+      clearTimeout(idleTimer)
+      disposeIce()
+    })
+    connection.on('error', () => {
+      clearTimeout(idleTimer)
+      disposeIce()
+    })
   }
 
   // --- mesh ----------------------------------------------------------------

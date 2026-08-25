@@ -8,6 +8,7 @@ import {
   type EnvelopeRejectReason,
   type ProtocolMessage
 } from '@shared/protocol'
+import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 
 export interface MeshCallbacks {
   /** Mensagem valida recebida de um par (autorizacao fica com o reducer). */
@@ -27,6 +28,8 @@ interface MeshEntry {
   direction: MeshDirection
   queue: unknown[]
   open: boolean
+  /** Descarte do diagnostico de ICE desta conexao. */
+  disposeIce: () => void
 }
 
 export class Mesh {
@@ -76,12 +79,19 @@ export class Mesh {
       }
       previous.connection.close()
     }
+    // A partir daqui a entrada anterior foi descartada: o diagnostico dela
+    // tambem (inclusive no caso raro de re-attach da MESMA conexao).
+    previous?.disposeIce()
 
     const entry: MeshEntry = {
       connection,
       direction,
       queue: previous ? [...previous.queue] : [],
-      open: false
+      open: false,
+      disposeIce: observePeerJsIce(
+        connection,
+        `mesh-${direction === 'outgoing' ? 'out' : 'in'}:${shortPeerId(peerId)}`
+      )
     }
     this.entries.set(peerId, entry)
 
@@ -106,6 +116,7 @@ export class Mesh {
       const current = this.entries.get(peerId)
       if (current?.connection !== connection) return
       current.open = false
+      current.disposeIce()
       this.entries.delete(peerId)
       this.callbacks.onClose(peerId)
     })
@@ -161,6 +172,7 @@ export class Mesh {
     const entry = this.entries.get(peerId)
     if (!entry) return
     this.entries.delete(peerId)
+    entry.disposeIce()
     // `flush` so faz sentido em canal ABERTO: num canal que nunca abriu (re-dial
     // de par caido) o peerjs tenta enviar assim mesmo e loga erro.
     if (entry.connection.open) entry.connection.close({ flush: true })
@@ -169,6 +181,7 @@ export class Mesh {
 
   closeAll(): void {
     for (const entry of this.entries.values()) {
+      entry.disposeIce()
       entry.connection.close({ flush: true })
     }
     this.entries.clear()

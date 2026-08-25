@@ -2,7 +2,7 @@
 // componente memoizado, `srcObject` atribuido UMA vez por stream via ref estavel
 // e sempre `muted` (o audio toca so no player).
 import { memo, useEffect, useRef } from 'react'
-import { VolumeIcon } from './icons'
+import { AlertIcon, VolumeIcon } from './icons'
 
 export interface StreamThumbnailProps {
   txId: string
@@ -13,6 +13,8 @@ export interface StreamThumbnailProps {
   isSelf: boolean
   watching: boolean
   reconnecting: boolean
+  /** A midia foi atendida e nunca chegou (conexao direta entre as redes). */
+  failed: boolean
   onSelect: (txId: string) => void
 }
 
@@ -25,6 +27,7 @@ export const StreamThumbnail = memo(function StreamThumbnail({
   isSelf,
   watching,
   reconnecting,
+  failed,
   onSelect
 }: StreamThumbnailProps): JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -50,7 +53,13 @@ export const StreamThumbnail = memo(function StreamThumbnail({
     >
       <video className="z-thumb__video" ref={videoRef} muted playsInline autoPlay />
       {isSelf ? <span className="z-thumb__self">sua transmissao</span> : null}
-      {stream ? null : (
+      {failed ? (
+        <span className="z-thumb__failure" data-testid="thumb-failure">
+          <AlertIcon size={18} />
+          <span className="z-thumb__failure-title">O video nao chegou ate voce</span>
+          <span className="z-thumb__failure-text">A conexao direta entre as redes falhou.</span>
+        </span>
+      ) : stream ? null : (
         <span className="z-empty__text" style={{ position: 'absolute', inset: 'auto 0 50% 0' }}>
           conectando video...
         </span>

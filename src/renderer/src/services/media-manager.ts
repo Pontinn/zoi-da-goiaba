@@ -2,9 +2,15 @@
 // N-copias para o roster e recepcao correlacionada por txId (SPEC Sprint 5).
 // Pilar de performance: nada aqui roda por frame; tudo e eventual.
 import type { MediaConnection } from 'peerjs'
-import { CALL_METADATA_WAIT_MS } from '@shared/config'
+import {
+  CALL_METADATA_WAIT_MS,
+  ICE_ATTACH_MAX_ATTEMPTS,
+  ICE_ATTACH_RETRY_INTERVAL_MS,
+  MEDIA_STALL_TIMEOUT_MS
+} from '@shared/config'
 import { PRESETS } from '@shared/presets'
 import type { PresetId, SourceKind, TxStopReason } from '@shared/protocol'
+import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
 
 export interface StartTransmissionOptions {
@@ -41,10 +47,34 @@ export class CaptureFailedError extends Error {
 }
 
 type StreamsListener = (streams: ReadonlyMap<string, MediaStream>) => void
+type FailuresListener = (failures: ReadonlySet<string>) => void
 
 interface PendingCall {
   call: MediaConnection
   receivedAt: number
+}
+
+/** Chamada de saida + o descarte do diagnostico de ICE dela. */
+interface OutgoingCall {
+  call: MediaConnection
+  disposeIce: () => void
+}
+
+/**
+ * Vigia de uma chamada RECEBIDA. O evento `stream` do PeerJS dispara ainda na
+ * negociacao, entao ter stream nao significa ter video: sem este vigia um ICE
+ * que nunca fecha fica para sempre como um retangulo preto.
+ */
+interface IncomingWatch {
+  call: MediaConnection
+  /** Prazo unico para a midia dar sinal de vida. */
+  timer: ReturnType<typeof setTimeout> | null
+  /** Espera pela `peerConnection` do PeerJS (ela nasce alguns ticks depois). */
+  connectionTimer: ReturnType<typeof setTimeout> | null
+  connectionAttempts: number
+  disposeIce: () => void
+  detachConnection: (() => void) | null
+  detachTrack: (() => void) | null
 }
 
 export class MediaManager implements MediaHooks {
@@ -52,12 +82,17 @@ export class MediaManager implements MediaHooks {
   /** txId -> stream recebida (RF-23: a mesma stream serve miniatura e player). */
   private readonly remoteStreams = new Map<string, MediaStream>()
   /** peerId -> chamada de saida ativa da transmissao local. */
-  private readonly outgoingCalls = new Map<string, MediaConnection>()
+  private readonly outgoingCalls = new Map<string, OutgoingCall>()
   /** txId -> chamada de entrada. */
   private readonly incomingCalls = new Map<string, MediaConnection>()
+  /** txId -> vigia da chamada de entrada (watchdog + diagnostico). */
+  private readonly incomingWatches = new Map<string, IncomingWatch>()
+  /** txIds cuja midia foi anunciada e nunca chegou (AC-25). */
+  private readonly mediaFailures = new Set<string>()
   private readonly pendingCalls: PendingCall[] = []
   private pendingTimer: ReturnType<typeof setInterval> | null = null
   private readonly streamsListeners = new Set<StreamsListener>()
+  private readonly failuresListeners = new Set<FailuresListener>()
 
   constructor(private readonly session: Session) {}
 
@@ -81,6 +116,22 @@ export class MediaManager implements MediaHooks {
     this.streamsListeners.add(listener)
     listener(this.getStreams())
     return () => this.streamsListeners.delete(listener)
+  }
+
+  /** txIds cuja midia foi atendida mas nunca chegou (a UI mostra o erro). */
+  getMediaFailures(): ReadonlySet<string> {
+    return new Set(this.mediaFailures)
+  }
+
+  subscribeMediaFailures(listener: FailuresListener): () => void {
+    this.failuresListeners.add(listener)
+    listener(this.getMediaFailures())
+    return () => this.failuresListeners.delete(listener)
+  }
+
+  private notifyMediaFailures(): void {
+    const snapshot = this.getMediaFailures()
+    for (const listener of this.failuresListeners) listener(snapshot)
   }
 
   private localStreamFor(txId: string): MediaStream | null {
@@ -171,7 +222,10 @@ export class MediaManager implements MediaHooks {
     if (!transmission) return
     this.local = null
 
-    for (const call of this.outgoingCalls.values()) call.close()
+    for (const outgoing of this.outgoingCalls.values()) {
+      outgoing.disposeIce()
+      outgoing.call.close()
+    }
     this.outgoingCalls.clear()
     transmission.stream.getTracks().forEach((track) => track.stop())
 
@@ -188,14 +242,17 @@ export class MediaManager implements MediaHooks {
   private callPeer(peerId: string): void {
     const transmission = this.local
     if (!transmission) return
-    this.outgoingCalls.get(peerId)?.close()
+    this.closeOutgoing(peerId)
     try {
       const call = this.session.callPeer(peerId, transmission.stream, {
         txId: transmission.txId
       })
-      this.outgoingCalls.set(peerId, call)
+      this.outgoingCalls.set(peerId, {
+        call,
+        disposeIce: observePeerJsIce(call, `media-out:${shortPeerId(peerId)}`)
+      })
       call.on('close', () => {
-        if (this.outgoingCalls.get(peerId) === call) this.outgoingCalls.delete(peerId)
+        if (this.outgoingCalls.get(peerId)?.call === call) this.closeOutgoing(peerId)
       })
       call.on('error', (error) => {
         console.warn(`[media] erro na chamada para ${peerId}:`, error)
@@ -204,6 +261,15 @@ export class MediaManager implements MediaHooks {
     } catch (error) {
       console.warn(`[media] nao foi possivel chamar ${peerId}:`, error)
     }
+  }
+
+  /** Encerra a chamada de saida de um par e o diagnostico dela. */
+  private closeOutgoing(peerId: string): void {
+    const outgoing = this.outgoingCalls.get(peerId)
+    if (!outgoing) return
+    this.outgoingCalls.delete(peerId)
+    outgoing.disposeIce()
+    outgoing.call.close()
   }
 
   /**
@@ -332,22 +398,129 @@ export class MediaManager implements MediaHooks {
 
   private answerCall(call: MediaConnection, txId: string): void {
     this.incomingCalls.get(txId)?.close()
+    this.stopIncomingWatch(txId)
     this.incomingCalls.set(txId, call)
     // Espectador nao devolve midia: a chamada e unidirecional.
     call.answer()
+    this.startIncomingWatch(call, txId)
     call.on('stream', (stream: MediaStream) => {
       this.remoteStreams.set(txId, stream)
+      this.watchIncomingTrack(txId, stream)
       this.notifyStreams()
     })
     call.on('close', () => {
       if (this.incomingCalls.get(txId) !== call) return
       this.incomingCalls.delete(txId)
+      this.stopIncomingWatch(txId)
+      this.clearMediaFailure(txId)
       this.remoteStreams.delete(txId)
       this.notifyStreams()
     })
     call.on('error', (error) => {
       console.warn(`[media] erro na chamada recebida de ${call.peer}:`, error)
     })
+  }
+
+  // --- vigia da midia recebida (tela preta silenciosa) ---------------------
+
+  private startIncomingWatch(call: MediaConnection, txId: string): void {
+    const watch: IncomingWatch = {
+      call,
+      timer: null,
+      connectionTimer: null,
+      connectionAttempts: 0,
+      disposeIce: observePeerJsIce(call, `media-in:${shortPeerId(call.peer)}`),
+      detachConnection: null,
+      detachTrack: null
+    }
+    this.incomingWatches.set(txId, watch)
+    watch.timer = setTimeout(() => {
+      watch.timer = null
+      this.reviewIncoming(txId, 'deadline')
+    }, MEDIA_STALL_TIMEOUT_MS)
+    this.trackConnectionState(txId, watch)
+  }
+
+  /** A `peerConnection` do PeerJS nasce alguns ticks depois do `answer()`. */
+  private trackConnectionState(txId: string, watch: IncomingWatch): void {
+    if (this.incomingWatches.get(txId) !== watch) return
+    const connection = watch.call.peerConnection
+    if (!connection) {
+      watch.connectionAttempts += 1
+      if (watch.connectionAttempts >= ICE_ATTACH_MAX_ATTEMPTS) return
+      watch.connectionTimer = setTimeout(() => {
+        watch.connectionTimer = null
+        this.trackConnectionState(txId, watch)
+      }, ICE_ATTACH_RETRY_INTERVAL_MS)
+      return
+    }
+
+    const listener = (): void => {
+      if (connection.connectionState === 'failed') this.markMediaFailure(txId)
+      else if (connection.connectionState === 'connected') this.reviewIncoming(txId, 'recovery')
+    }
+    connection.addEventListener('connectionstatechange', listener)
+    watch.detachConnection = () => connection.removeEventListener('connectionstatechange', listener)
+  }
+
+  /** A track remota nasce `muted` e so desmuta quando o primeiro RTP chega. */
+  private watchIncomingTrack(txId: string, stream: MediaStream): void {
+    const watch = this.incomingWatches.get(txId)
+    if (!watch) return
+    watch.detachTrack?.()
+    watch.detachTrack = null
+    const track = stream.getVideoTracks()[0]
+    if (!track) return
+    const onUnmute = (): void => this.reviewIncoming(txId, 'recovery')
+    track.addEventListener('unmute', onUnmute)
+    watch.detachTrack = () => track.removeEventListener('unmute', onUnmute)
+  }
+
+  /** Chegou video de verdade: conexao estabelecida E track recebendo quadros. */
+  private isIncomingHealthy(txId: string): boolean {
+    const watch = this.incomingWatches.get(txId)
+    if (!watch) return true
+    const connection = watch.call.peerConnection
+    if (!connection || connection.connectionState !== 'connected') return false
+    const track = this.remoteStreams.get(txId)?.getVideoTracks()[0]
+    return track !== undefined && !track.muted
+  }
+
+  /**
+   * `deadline`: passou o prazo, o veredito e final (falhou ou nao).
+   * `recovery`: algo melhorou; so serve para LIMPAR uma falha ja marcada.
+   */
+  private reviewIncoming(txId: string, moment: 'deadline' | 'recovery'): void {
+    if (this.isIncomingHealthy(txId)) {
+      this.clearMediaFailure(txId)
+      return
+    }
+    if (moment === 'deadline') this.markMediaFailure(txId)
+  }
+
+  private markMediaFailure(txId: string): void {
+    if (this.mediaFailures.has(txId)) return
+    const peerId = this.incomingWatches.get(txId)?.call.peer ?? ''
+    this.mediaFailures.add(txId)
+    this.notifyMediaFailures()
+    this.session.notifyMediaFailure(txId, peerId)
+  }
+
+  private clearMediaFailure(txId: string): void {
+    if (!this.mediaFailures.delete(txId)) return
+    console.info(`[media] a transmissao ${txId} finalmente chegou; erro removido`)
+    this.notifyMediaFailures()
+  }
+
+  private stopIncomingWatch(txId: string): void {
+    const watch = this.incomingWatches.get(txId)
+    if (!watch) return
+    this.incomingWatches.delete(txId)
+    if (watch.timer !== null) clearTimeout(watch.timer)
+    if (watch.connectionTimer !== null) clearTimeout(watch.connectionTimer)
+    watch.detachConnection?.()
+    watch.detachTrack?.()
+    watch.disposeIce()
   }
 
   stopLocal(reason: TxStopReason): void {
@@ -365,6 +538,8 @@ export class MediaManager implements MediaHooks {
 
   /** Remove uma transmissao remota que saiu do roster/parou. */
   dropRemote(txId: string): void {
+    this.stopIncomingWatch(txId)
+    this.clearMediaFailure(txId)
     this.incomingCalls.get(txId)?.close()
     this.incomingCalls.delete(txId)
     if (this.remoteStreams.delete(txId)) this.notifyStreams()
@@ -376,9 +551,17 @@ export class MediaManager implements MediaHooks {
       this.pendingTimer = null
     }
     for (const pending of this.pendingCalls.splice(0)) pending.call.close()
+    for (const txId of [...this.incomingWatches.keys()]) this.stopIncomingWatch(txId)
+    if (this.mediaFailures.size > 0) {
+      this.mediaFailures.clear()
+      this.notifyMediaFailures()
+    }
     for (const call of this.incomingCalls.values()) call.close()
     this.incomingCalls.clear()
-    for (const call of this.outgoingCalls.values()) call.close()
+    for (const outgoing of this.outgoingCalls.values()) {
+      outgoing.disposeIce()
+      outgoing.call.close()
+    }
     this.outgoingCalls.clear()
     this.remoteStreams.clear()
     if (this.local) {

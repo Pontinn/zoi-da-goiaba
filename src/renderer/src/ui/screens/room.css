@@ -442,6 +442,32 @@
   font-weight: 500;
 }
 
+/* Midia anunciada que nunca chegou: no lugar do retangulo preto, o motivo. */
+.z-thumb__failure {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-3) var(--space-8);
+  text-align: center;
+  background: #000000cc;
+  color: var(--warning);
+}
+
+.z-thumb__failure-title {
+  font-size: var(--text-secondary-size);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.z-thumb__failure-text {
+  font-size: var(--text-meta);
+  color: var(--text-secondary);
+}
+
 /* --- Seletor de fonte ---------------------------------------------------- */
 
 .z-picker__tabs {

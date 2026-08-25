@@ -76,6 +76,23 @@ export const QUALITY_BAD_MIN_PACKET_LOSS = 0.05
 /** Espera pelo TX_START correspondente ao metadata de uma chamada de midia. */
 export const CALL_METADATA_WAIT_MS = 5_000
 
+/**
+ * Diagnostico de ICE. A `peerConnection` de um objeto do PeerJS pode demorar
+ * alguns ticks para existir, entao a observacao espera por ela antes de desistir
+ * (40 x 250ms = 10s, a mesma ordem de grandeza do resto do ingresso).
+ */
+export const ICE_ATTACH_RETRY_INTERVAL_MS = 250
+export const ICE_ATTACH_MAX_ATTEMPTS = 40
+/** `disconnected` so vira relatorio de falha se persistir por este tempo. */
+export const ICE_DISCONNECTED_REPORT_AFTER_MS = 5_000
+
+/**
+ * Tempo ate declarar que a midia recebida NAO chegou. O evento `stream` do
+ * PeerJS dispara ainda na negociacao (SDP), muito antes do primeiro pacote RTP:
+ * sem este prazo, um ICE que nunca fecha vira tela preta silenciosa.
+ */
+export const MEDIA_STALL_TIMEOUT_MS = 10_000
+
 /** Debounce do WATCHING_UPDATE ao alternar rapidamente entre streams. */
 export const WATCHING_UPDATE_DEBOUNCE_MS = 300
 

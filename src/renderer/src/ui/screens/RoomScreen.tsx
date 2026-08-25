@@ -31,6 +31,7 @@ import { PlayerView } from './PlayerView'
 export function RoomScreen(): JSX.Element {
   const room = useRoomStore((state) => state.room)
   const streams = useRoomStore((state) => state.streams)
+  const mediaFailures = useRoomStore((state) => state.mediaFailures)
   const localTx = useRoomStore((state) => state.localTx)
   const qualityTick = useRoomStore((state) => state.qualityTick)
   const selectedTxId = useRoomStore((state) => state.selectedTxId)
@@ -227,6 +228,7 @@ export function RoomScreen(): JSX.Element {
                 presetLabel={PRESETS[selected.presetId].label}
                 hasAudio={selected.hasAudio}
                 reconnecting={selected.status === 'reconnecting'}
+                failed={mediaFailures.has(selected.txId)}
                 quality={room.quality[selected.peerId]}
                 qualityTick={qualityTick}
                 onBack={() => selectTransmission(null)}
@@ -246,6 +248,7 @@ export function RoomScreen(): JSX.Element {
                           isSelf={transmission.peerId === room.selfPeerId}
                           watching={false}
                           reconnecting={transmission.status === 'reconnecting'}
+                          failed={mediaFailures.has(transmission.txId)}
                           onSelect={selectTransmission}
                         />
                       </div>
@@ -284,6 +287,7 @@ export function RoomScreen(): JSX.Element {
                     isSelf={transmission.peerId === room.selfPeerId}
                     watching={selectedTxId === transmission.txId}
                     reconnecting={transmission.status === 'reconnecting'}
+                    failed={mediaFailures.has(transmission.txId)}
                     onSelect={selectTransmission}
                   />
                 </div>

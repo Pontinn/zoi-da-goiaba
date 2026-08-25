@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { QualitySample } from '../../core/room-state'
 import { closePip, isPipSupported, openPip } from '../../services/pip-controller'
+import { MediaFailureOverlay } from '../components/MediaFailureOverlay'
 import { PlayerControls } from '../components/PlayerControls'
 import { ReconnectOverlay } from '../components/ReconnectOverlay'
 
@@ -20,6 +21,8 @@ export interface PlayerViewProps {
   presetLabel: string
   hasAudio: boolean
   reconnecting: boolean
+  /** A midia foi atendida e nunca chegou (conexao direta entre as redes). */
+  failed: boolean
   quality: QualitySample | undefined
   qualityTick: number
   onBack: () => void
@@ -32,6 +35,7 @@ export function PlayerView({
   presetLabel,
   hasAudio,
   reconnecting,
+  failed,
   quality,
   qualityTick,
   onBack
@@ -161,6 +165,8 @@ export function PlayerView({
       ) : null}
 
       {reconnecting ? <ReconnectOverlay nickname={nickname} /> : null}
+
+      {!reconnecting && failed ? <MediaFailureOverlay nickname={nickname} /> : null}
 
       <PlayerControls
         visible={controlsVisible}

@@ -160,6 +160,24 @@
 .z-reconnect__hint {
   font-size: var(--text-secondary-size);
   color: var(--text-secondary);
+  max-width: 46ch;
+  text-align: center;
+}
+
+/* Mesmo overlay, mas para a falha definitiva da conexao direta (sem TURN). */
+.z-reconnect--failure {
+  background: #000000d9;
+}
+
+.z-reconnect__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #ffb2241f;
+  color: var(--warning);
 }
 
 /* --- Faixa de outras transmissoes ------------------------------------------ */
