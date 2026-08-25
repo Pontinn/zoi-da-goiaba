@@ -25,6 +25,7 @@ import {
   SIGNALING_RECONNECT_TIMEOUT_MS
 } from '@shared/config'
 import { toPeerId } from '../core/room-code'
+import { observeSignalingCandidates } from './ice-diagnostics'
 
 export type PeerErrorType = PeerError<string>['type']
 
@@ -103,6 +104,9 @@ export class PeerManager {
   private doorRecovering = false
   /** Serializa registro e recuperacao: dois registros paralelos se destruiriam. */
   private doorOperation: Promise<unknown> | null = null
+  /** Descartes do contador de CANDIDATE na sinalizacao (diagnostico puro). */
+  private disposeMemberSignaling: (() => void) | null = null
+  private disposeDoorSignaling: (() => void) | null = null
   private memberReconnectTimer: ReturnType<typeof setTimeout> | null = null
   private healthTimer: ReturnType<typeof setInterval> | null = null
   private lastHealthTickAt = 0
@@ -156,6 +160,7 @@ export class PeerManager {
 
     peer.on('connection', (connection) => this.callbacks.onMeshConnection(connection))
     peer.on('call', (call) => this.callbacks.onCall(call))
+    this.disposeMemberSignaling = observeSignalingCandidates(peer, 'member')
 
     // `open` volta a ser emitido a cada reconexao bem-sucedida: e a confirmacao
     // de que a sinalizacao voltou (um unico listener, registrado aqui).
@@ -301,6 +306,8 @@ export class PeerManager {
     this.doorCode = null
     this.disposeDoorPeer()
     this.setDoorHealth('closed')
+    this.disposeMemberSignaling?.()
+    this.disposeMemberSignaling = null
     if (this.memberPeer) {
       this.memberPeer.destroy()
       this.memberPeer = null
@@ -321,6 +328,8 @@ export class PeerManager {
   }
 
   private disposeDoorPeer(): void {
+    this.disposeDoorSignaling?.()
+    this.disposeDoorSignaling = null
     if (!this.doorPeer) return
     const peer = this.doorPeer
     this.doorPeer = null
@@ -420,6 +429,8 @@ export class PeerManager {
   }
 
   private attachDoorHandlers(peer: Peer): void {
+    this.disposeDoorSignaling?.()
+    this.disposeDoorSignaling = observeSignalingCandidates(peer, 'door')
     peer.on('connection', (connection) => this.callbacks.onDoorConnection(connection))
     // O door nunca carrega midia: qualquer chamada e recusada.
     peer.on('call', (call) => call.close())
