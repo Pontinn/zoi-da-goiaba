@@ -92,7 +92,13 @@ export async function launchInstance(label: string, nickname: string): Promise<Z
   const app = await electron.launch({
     args: [PROJECT_ROOT],
     cwd: PROJECT_ROOT,
-    env: { ...cleanEnv(), ZOI_USER_DATA_DIR: userDataDir },
+    env: {
+      ...cleanEnv(),
+      ZOI_USER_DATA_DIR: userDataDir,
+      // O e2e cobre a UI e o caminho DEGRADADO deterministico: sem isso cada
+      // instancia subiria um utilityProcess capturando audio real da maquina.
+      ZOI_DISABLE_AUDIO_EXCLUSION: '1'
+    },
     timeout: LAUNCH_TIMEOUT_MS
   })
 
@@ -198,13 +204,7 @@ export function participantCard(instance: ZoiInstance, nickname: string): Locato
 }
 
 /** Mesma ordem de PRESET_LIST; duplicado aqui porque o e2e nao importa @shared. */
-const PRESET_TESTIDS = [
-  'p720_30',
-  'p1080_30',
-  'p1080_30_hq',
-  'p1080_60',
-  'p1080_60_hq'
-] as const
+const PRESET_TESTIDS = ['p720_30', 'p1080_30', 'p1080_30_hq', 'p1080_60', 'p1080_60_hq'] as const
 
 export interface TransmitOptions {
   /** Preset da SPEC; o padrao usa o mais leve para nao pesar na maquina do teste. */
@@ -291,10 +291,7 @@ export function expectNoDirectionFallbacks(instances: (ZoiInstance | null)[]): v
 export async function wakePlayerControls(instance: ZoiInstance): Promise<void> {
   await instance.page.mouse.move(600, 400)
   await instance.page.mouse.move(620, 420)
-  await expect(instance.page.getByTestId('player-controls')).toHaveAttribute(
-    'data-visible',
-    'true'
-  )
+  await expect(instance.page.getByTestId('player-controls')).toHaveAttribute('data-visible', 'true')
 }
 
 type ModerationAction = 'kick' | 'ban'

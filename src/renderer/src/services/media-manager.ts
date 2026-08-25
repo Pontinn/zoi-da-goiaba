@@ -10,6 +10,11 @@ import {
 } from '@shared/config'
 import { PRESETS } from '@shared/presets'
 import type { PresetId, SourceKind, TxStopReason } from '@shared/protocol'
+import {
+  createAudioExclusionClient,
+  type AudioExclusionClient,
+  type AudioExclusionSession
+} from './audio-exclusion'
 import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
 
@@ -21,6 +26,13 @@ export interface StartTransmissionOptions {
   withAudio: boolean
 }
 
+/**
+ * De onde veio o audio da transmissao. `excluded` = captura por aplicativo com
+ * Discord e Zoi fora do mix; `full-loopback` = som do sistema inteiro (caminho
+ * degradado, identico ao comportamento antigo); `none` = transmissao sem audio.
+ */
+export type AudioMode = 'excluded' | 'full-loopback' | 'none'
+
 export interface LocalTransmission {
   txId: string
   presetId: PresetId
@@ -28,7 +40,10 @@ export interface LocalTransmission {
   sourceLabel: string
   sourceKind: SourceKind
   hasAudio: boolean
+  audioMode: AudioMode
   stream: MediaStream
+  /** Descarte do writer/port da captura com exclusao (null nos outros modos). */
+  stopAudioExclusion: (() => void) | null
 }
 
 export class TransmissionInProgressError extends Error {
@@ -173,7 +188,9 @@ export class MediaManager implements MediaHooks {
   constructor(
     private readonly session: Session,
     /** Injetavel nos testes: o canvas e o AudioContext so existem no renderer. */
-    private readonly createPullStream: () => PullStream | null = createDummyStream
+    private readonly createPullStream: () => PullStream | null = createDummyStream,
+    /** Injetavel nos testes: depende de IPC e do breakout box do Chromium. */
+    private readonly audioExclusion: AudioExclusionClient = createAudioExclusionClient()
   ) {}
 
   // --- consulta ------------------------------------------------------------
@@ -230,9 +247,24 @@ export class MediaManager implements MediaHooks {
     if (this.local) throw new TransmissionInProgressError()
 
     const preset = PRESETS[options.presetId]
+
+    // A exclusao e armada ANTES da captura de video: com ela ativa o audio nao
+    // vem mais do getDisplayMedia, e sim da nossa track gerada.
+    let exclusion: AudioExclusionSession | null = null
+    if (options.withAudio) {
+      const outcome = await this.audioExclusion.start()
+      exclusion = outcome.session
+      if (!exclusion) {
+        console.warn(
+          `[media] captura por aplicativo indisponivel (${outcome.reason ?? 'sem motivo'})`
+        )
+      }
+    }
+    const useSystemLoopback = options.withAudio && exclusion === null
+
     await window.zoi.capture.selectSource({
       sourceId: options.sourceId,
-      withAudio: options.withAudio
+      withAudio: useSystemLoopback
     })
 
     let stream: MediaStream
@@ -243,19 +275,26 @@ export class MediaManager implements MediaHooks {
           height: { ideal: preset.height },
           frameRate: { ideal: preset.frameRate }
         },
-        audio: options.withAudio
+        audio: useSystemLoopback
       })
     } catch (error) {
+      // Nao deixar worker armado para tras quando o usuario cancela o seletor.
+      exclusion?.stop()
       throw new CaptureFailedError(error)
     }
 
     const videoTrack = stream.getVideoTracks()[0]
     if (!videoTrack) {
       stream.getTracks().forEach((track) => track.stop())
+      exclusion?.stop()
       throw new CaptureFailedError(new Error('a fonte nao devolveu video'))
     }
     // Conteudo de tela em movimento (filme/jogo): prioriza taxa de quadros.
     videoTrack.contentHint = 'motion'
+
+    // A track entra na stream ANTES do announce e das chamadas: os dois
+    // caminhos de midia (direto e pull) herdam o audio sem tocar em nada.
+    if (exclusion) stream.addTrack(exclusion.track)
 
     const hasAudio = stream.getAudioTracks().length > 0
     if (options.withAudio && !hasAudio) {
@@ -275,7 +314,9 @@ export class MediaManager implements MediaHooks {
       sourceLabel: options.sourceLabel,
       sourceKind: options.sourceKind,
       hasAudio,
-      stream
+      audioMode: !options.withAudio ? 'none' : exclusion ? 'excluded' : 'full-loopback',
+      stream,
+      stopAudioExclusion: exclusion ? () => exclusion.stop() : null
     }
     this.local = transmission
 
@@ -308,6 +349,7 @@ export class MediaManager implements MediaHooks {
     }
     this.outgoingCalls.clear()
     transmission.stream.getTracks().forEach((track) => track.stop())
+    transmission.stopAudioExclusion?.()
 
     this.session.announceTransmissionStop(reason)
     this.notifyStreams()
@@ -754,6 +796,7 @@ export class MediaManager implements MediaHooks {
     this.remoteStreams.clear()
     if (this.local) {
       this.local.stream.getTracks().forEach((track) => track.stop())
+      this.local.stopAudioExclusion?.()
       this.local = null
     }
     this.notifyStreams()

@@ -1,6 +1,6 @@
 // Tela 4 do UISPEC (Sala): barra de transmissao, sidebar de participantes com
 // badges, grade de miniaturas ao vivo, fluxo de transmitir e moderacao do dono.
-import { useCallback, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { PRESETS } from '@shared/presets'
 import { isOwner as computeIsOwner, nicknameOf, viewersOf } from '../../core/room-state'
 import {
@@ -19,13 +19,7 @@ import { SourcePickerModal, type SourceChoice } from '../components/SourcePicker
 import { StreamThumbnail } from '../components/StreamThumbnail'
 import { TransmissionStatusCard } from '../components/TransmissionStatusCard'
 import { TransmittingBar } from '../components/TransmittingBar'
-import {
-  BroadcastIcon,
-  CheckIcon,
-  CopyIcon,
-  GearIcon,
-  LogoutIcon
-} from '../components/icons'
+import { BroadcastIcon, CheckIcon, CopyIcon, GearIcon, LogoutIcon } from '../components/icons'
 import { copyText } from '../clipboard'
 import { PlayerView } from './PlayerView'
 
@@ -82,6 +76,33 @@ export function RoomScreen(): JSX.Element {
   const ownSourceLabel = (fallback: string): string => localTx?.sourceLabel ?? fallback
   const ownHasAudio = (fallback: boolean): boolean => localTx?.hasAudio ?? fallback
 
+  /**
+   * Avisos de degradacao em RUNTIME (RF-08): o motor de audio pode cair no meio
+   * da transmissao e o main degrada por baixo. O usuario nunca fica sem saber,
+   * mas tambem nao leva o mesmo aviso duas vezes: o conjunto e por transmissao
+   * (o efeito remonta quando o txId muda).
+   */
+  const excludedTxId = localTx?.audioMode === 'excluded' ? localTx.txId : null
+  useEffect(() => {
+    if (!excludedTxId) return undefined
+    const alreadyWarned = new Set<string>()
+    return window.zoi.audioExclusion.onStatus((status) => {
+      if (alreadyWarned.has(status.state)) return
+      alreadyWarned.add(status.state)
+      if (status.state === 'degraded-full-loopback') {
+        pushToast(
+          'warning',
+          'A captura de audio por aplicativo falhou; a transmissao segue com o som do sistema inteiro.'
+        )
+      } else if (status.state === 'failed') {
+        pushToast(
+          'warning',
+          'O audio da transmissao caiu; pare e transmita de novo para restaurar o som.'
+        )
+      }
+    })
+  }, [excludedTxId, pushToast])
+
   const transmittingPeers = useMemo(
     () => new Set(transmissions.map((transmission) => transmission.peerId)),
     [transmissions]
@@ -117,6 +138,11 @@ export function RoomScreen(): JSX.Element {
         pushToast(
           'warning',
           'Nao foi possivel capturar o audio do sistema; a transmissao segue so com video.'
+        )
+      } else if (transmission.audioMode === 'full-loopback') {
+        pushToast(
+          'warning',
+          'Nao foi possivel isolar o audio do Discord; a transmissao segue com o som do sistema inteiro.'
         )
       }
     } catch (error) {
@@ -377,7 +403,6 @@ export function RoomScreen(): JSX.Element {
       </Modal>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-
     </div>
   )
 }
