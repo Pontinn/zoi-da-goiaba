@@ -113,10 +113,32 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-4);
+  /* Sem padding embaixo: quem fecha a sidebar e o rodape, colado na borda. */
+  padding: var(--space-4) var(--space-4) 0;
   border-right: 1px solid var(--border);
   background: var(--bg-surface);
   overflow-y: auto;
+}
+
+/*
+ * Rodape da sidebar (engrenagem de configuracoes). Lista curta: o
+ * `margin-top: auto` empurra o rodape para o fim da coluna. Lista longa: o
+ * `position: sticky` mantem ele visivel enquanto os participantes rolam por
+ * baixo, sem nunca sumir nem cobrir o card que estiver no fim da rolagem.
+ * O `z-index` fica ABAIXO do 30 do wrapper com menu de participante aberto,
+ * para o menu continuar por cima do rodape.
+ */
+.z-room__aside-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  margin-top: auto;
+  margin-inline: calc(var(--space-4) * -1);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
 }
 
 .z-room__aside-title {

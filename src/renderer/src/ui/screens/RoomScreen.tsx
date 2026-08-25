@@ -219,9 +219,6 @@ export function RoomScreen(): JSX.Element {
             Transmitir
           </Button>
         )}
-        <IconButton label="Configuracoes" onClick={() => setSettingsOpen(true)}>
-          <GearIcon />
-        </IconButton>
         <Button variant="danger" icon={<LogoutIcon />} onClick={leave} data-testid="leave-room">
           Sair
         </Button>
@@ -257,6 +254,17 @@ export function RoomScreen(): JSX.Element {
               />
             </div>
           ))}
+          {/* Rodape da sidebar: a engrenagem mora no canto de baixo, longe dos
+              botoes de acao da barra do topo. */}
+          <div className="z-room__aside-footer">
+            <IconButton
+              label="Configuracoes"
+              onClick={() => setSettingsOpen(true)}
+              data-testid="open-settings"
+            >
+              <GearIcon />
+            </IconButton>
+          </div>
         </aside>
 
         <main className="z-room__main">
