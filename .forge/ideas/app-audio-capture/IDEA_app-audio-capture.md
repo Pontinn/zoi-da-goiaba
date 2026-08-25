@@ -2,7 +2,7 @@
 feature: app-audio-capture
 language: pt-BR
 type: change
-status: in-progress
+status: done
 created: 2026-08-25
 ---
 
@@ -14,6 +14,8 @@ O grupo usa o Discord para conversar por voz e o Zoi da Goiaba so para compartil
 
 Objetivo: a captura de som da transmissao nao deve incluir o audio do Discord (ou, na variante invertida, deve incluir APENAS o som do app que interessa).
 
+SEGUNDO PROBLEMA (adicionado 2026-08-25): quem transmite consegue abrir e ASSISTIR a PROPRIA tela transmitida dentro do app. Nas palavras do usuario: "quando eu compartilho a tela e assisto minha propria tela eu ouco tudo la e fica looping desgracado", "absurdamente alto e ensurdecedor". O audio reproduzido pelo proprio app e recapturado pelo loopback e o loop cresce sem parar. Pedido: o transmissor NUNCA pode ouvir nem VER a propria tela transmitida; no lugar deve aparecer uma mensagem tipo "Transmissao iniciada". A visao dos OUTROS participantes continua exatamente como esta.
+
 ## 2. Decisoes (lista viva)
 
 - 2026-08-25: Todos os PCs do grupo rodam Windows 11 (relato do usuario), entao a API de Process Loopback do Windows (AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, incluir ou excluir arvore de processos) esta disponivel em todas as maquinas. Sem gate de versao de SO no MVP da feature.
@@ -21,11 +23,21 @@ Objetivo: a captura de som da transmissao nao deve incluir o audio do Discord (o
 - 2026-08-25: Antes de escrever codigo nativo, INVESTIGAR se o Electron 43 / Chromium ja expoe a captura de audio por janela no Windows (o Chromium ganhou suporte a window audio capture usando Process Loopback por baixo). Se expor, a feature pode dispensar o addon nativo.
 - 2026-08-25 (finalizacao com o usuario): (a) exclusao e SO DO DISCORD, FIXA no codigo (sem lista de apps; lista fica como evolucao futura se pedirem); (b) SEMPRE LIGADA quando transmitir com som, sem toggle: zero fricao, com aviso discreto se a captura por processo falhar e degradar pro loopback atual. Resolve o desdobramento do P1, o P3 e o P4: sem UI de escolha e sem preferencia a persistir; a unica UI e o aviso de degradacao.
 
+- 2026-08-25: NOVO PEDIDO incorporado a feature: bloquear auto-visualizacao do transmissor (nao ve nem ouve a propria transmissao; placeholder "Transmissao iniciada" ou similar). Espectadores nao mudam.
+- 2026-08-25: DECIDIDO (P6): no lugar do tile da propria tela entra um CARD PERSISTENTE com status: mensagem "Transmissao iniciada" + info util (fonte compartilhada, com/sem audio, contagem de espectadores), visivel durante toda a transmissao.
+- 2026-08-25: DECIDIDO (P7): a captura exclui a arvore de processos do Discord E do PROPRIO Zoi. Defesa em profundidade contra o loop e contra o vazamento do audio de outra transmissao assistida enquanto se transmite.
+- 2026-08-25: Duas transmissoes simultaneas no grupo: "raro, mas possivel" (usuario). Tratar como borda suportada: transmitir e assistir outra transmissao ao mesmo tempo deve funcionar, e a exclusao do Zoi impede o som dela de vazar na sua.
+- 2026-08-25 (fechamento da Stage 1): usuario aprovou o resumo final e autorizou MODO 100% AUTONOMO para o restante do pipeline: o orquestrador toma as decisoes que faltarem, priorizando (a) qualidade e performance do app e (b) usabilidade, e (c) nada do que ja foi feito pode ser danificado (mudancas no codigo existente sao esperadas quando necessarias, regressao de comportamento nao). Push/merge/release continuam SO com pedido explicito do usuario.
+- 2026-08-25 (diretriz permanente do usuario para as decisoes autonomas): sempre escolher o que beneficia a EXPERIENCIA DO USUARIO: nao atrapalhar, nao complicar e nao perder qualidade. Criterio de desempate em qualquer decisao de produto/UI deste pipeline.
+- 2026-08-25 (design/animacoes, pedido do usuario): o card de bloqueio da propria tela deve ter ANIMACOES caprichadas: entrada dos elementos com bounce, texto "Transmissao iniciada" aparecendo com transicao suave e bonita. Sao ideias do usuario; o orquestrador decide o que cabe, mas a regua e alta: "quero que fique bem impressionante no quesito animacoes", mesmo sendo app entre amigos. Limite: animacoes nao podem custar performance de video (pilar) nem atrapalhar a usabilidade (diretriz UX): preferir CSS transform/opacity acelerado por GPU, sem loops pesados.
+- 2026-08-25 (design/animacoes, complemento do usuario): pode usar a LOGO DO APP nas animacoes para deixar mais caracteristico; nao se limitar a cores. Direcao para o UISPEC/implementacao: a logo como elemento central do card de status (ex: logo com bounce na entrada), mantendo os limites de performance.
+
 ## 3. Escopo
 
 Dentro:
 - Pipeline de captura de audio da transmissao (hoje: loopback do sistema inteiro via getDisplayMedia + selectSource no main).
-- UI minima para a escolha (excluir app / capturar so o app), no padrao visual existente (SourcePickerModal / SettingsModal).
+- Auto-visualizacao do transmissor: bloquear ver/ouvir a propria transmissao; placeholder "Transmissao iniciada" no lugar da tela propria.
+- UI: apenas o card persistente de status do transmissor e o aviso de degradacao (toast padrao). SEM UI de escolha de modo (decisao P3). Padrao visual existente (precedentes: ReconnectOverlay/MediaFailureOverlay, pushToast warning).
 - Windows apenas (o app ja e Windows-only).
 
 Fora (NAO tocar):
@@ -42,17 +54,18 @@ Fora (NAO tocar):
 
 ## 5. Papeis e permissoes
 
-N/A por acao de sala: a escolha e local de quem transmite (nao ha diferenca dono/membro). Confirmar na finalizacao.
+CONFIRMADO 2026-08-25 (finalizacao): igual pra todo transmissor, dono ou membro. Bloqueio da propria tela + card de status + exclusao de audio sao locais de quem transmite, sem regra por papel.
 
 ## 6. Entidades e ciclo de vida
 
-- Preferencia de captura de audio (modo + app alvo, se houver): onde persiste (settings ja existentes do app?), como recarrega na proxima transmissao, como aparece pre-selecionada na UI. PONTO EM ABERTO P4.
+- Nenhuma entidade nova e nada a persistir (P3/P4 resolvidos: sem preferencia, exclusao fixa sempre ligada). O "ciclo de vida" relevante e o da transmissao: iniciar (card de status aparece pro transmissor), trocar fonte (card atualiza a fonte, bloqueio continua), parar (card some, grade volta ao normal), retransmitir (tudo se reaplica).
 
 ## 7. Regras de negocio e exemplos
 
-- Variante A (excluir): capturar todo o sistema MENOS a arvore de processos do Discord. Exemplo: filme no MPV + Discord tocando vozes -> o espectador ouve o filme, nao ouve as vozes.
+- Variante A (excluir): capturar todo o sistema MENOS as arvores de processos do Discord E do proprio Zoi (decisao P7). Exemplo: filme no MPV + Discord tocando vozes + Zoi tocando a transmissao de outra pessoa -> o espectador ouve o filme; nao ouve as vozes nem a outra transmissao.
 - Variante B (incluir apenas): capturar SO a arvore de processos do app escolhido. Exemplo: transmitindo o monitor inteiro com filme no MPV -> escolher "MPV" como fonte de audio; espectador ouve so o filme, mesmo com Discord e WhatsApp apitando.
 - Regra comum: "app" significa ARVORE de processos (Discord e navegadores tem varios processos filhos).
+- Auto-visualizacao: se EU transmito, a minha propria transmissao nunca toca video nem audio na MINHA maquina; vejo apenas o placeholder. Exemplo: sala com Leo (transmitindo) + Bruna + Joao: Leo ve "Transmissao iniciada"; Bruna e Joao veem e ouvem a tela do Leo normalmente. Se a Bruna tambem transmitir, Leo ve/ouve a transmissao da Bruna normalmente (o bloqueio e so da PROPRIA).
 
 ## 8. Casos de borda / caminhos tristes
 
@@ -62,19 +75,25 @@ N/A por acao de sala: a escolha e local de quem transmite (nao ha diferenca dono
 - Discord instalado de formas diferentes (Discord/DiscordPTB/Canary, ou aberto no navegador): como identificar o processo a excluir na variante A.
 - Fallback se a captura por processo falhar em runtime: degradar para o loopback atual com aviso, nunca transmitir mudo sem avisar.
 - Maquina fora do esperado (alguem entra com Win10 antigo): comportamento de degradacao.
+- Realimentacao de audio: transmissor abre a propria tela transmitida no app -> loop infinito ensurdecedor (problema relatado; vira impossivel com o bloqueio de auto-visualizacao, e a exclusao do proprio app da captura pode servir de defesa extra, ver P7).
+- PiP / troca de fonte / re-transmissao: o bloqueio da propria tela precisa valer em TODOS os caminhos de exibicao (tile normal, PiP, apos trocar de fonte, apos parar e retransmitir).
 
 ## 9. Referencia de UI
 
-mode: project-identity. Seguir o padrao visual existente (tema escuro + roxo #9d00ff); a escolha de audio provavelmente vive no fluxo do SourcePickerModal (onde ja se escolhe fonte e "com audio") e/ou na SettingsModal.
+mode: project-identity. Seguir o padrao visual existente (tema escuro + roxo #9d00ff); precedentes de overlay: ReconnectOverlay/MediaFailureOverlay. DIRECAO DE MOTION (2026-08-25): o card de status da propria transmissao e vitrine de animacao: entrada com bounce dos elementos, texto com fade/slide suave, nivel "bem impressionante". Detalhar no UISPEC (Stage 3b) tokens de motion coerentes com o app.
 
 ## 10. Prioridades
 
 - Must: as vozes do Discord nao vazarem na transmissao (o problema relatado).
+- Must: transmissor nunca ver/ouvir a propria transmissao (mata o loop de realimentacao).
+- Should: animacoes de alto nivel no card de bloqueio (bounce na entrada, texto suave); polish visual impressionante sem custo de performance.
 - Nice: seletor generico de app de audio (qualquer app, nao so Discord); lembrar a escolha entre sessoes.
 
 ## 11. Assumptions confirmadas
 
 - "Acredito que todos estejam usando win11" (usuario, 2026-08-25): tratado como confirmado para planejamento, com degradacao educada como borda (secao 8) caso apareca excecao.
+- 2026-08-25 (finalizacao): papeis confirmados como N/A (comportamento igual pra dono e membro; ver secao 5).
+- 2026-08-25 (finalizacao): copy exata do card ("Transmissao iniciada" + detalhes) pode ser lapidada na implementacao no tom do app (pt-BR sem acento); nao precisa de aprovacao previa da copy.
 
 ## 12. Pontos em aberto (lista viva)
 
@@ -83,6 +102,8 @@ mode: project-identity. Seguir o padrao visual existente (tema escuro + roxo #9d
 - P3: RESOLVIDO 2026-08-25: sem UI de escolha; exclusao sempre ligada (secao 2). So o aviso de degradacao.
 - P4: RESOLVIDO 2026-08-25: nada a persistir (sem preferencia).
 - P5: Comportamento quando o app de audio fecha no meio da transmissao (borda da secao 8).
+- P6: RESOLVIDO 2026-08-25: card persistente com status (mensagem + fonte + com/sem audio + contagem de espectadores). Decisao na secao 2.
+- P7: RESOLVIDO 2026-08-25: sim, excluir tambem o proprio Zoi da captura. Decisao na secao 2.
 
 ## 13. APENDICE: contexto tecnico do projeto (para sessao com contexto ZERO)
 
