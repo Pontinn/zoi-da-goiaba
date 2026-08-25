@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { app, shell, powerMonitor, BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
 import { registerDisplayMediaHandler } from './capture'
+import { attachRendererLogging, logToFile, startFileLogger } from './file-logger'
 import { registerIpcHandlers } from './ipc-handlers'
 import { registerUpdaterIpc, startUpdater } from './updater'
 
@@ -67,6 +68,10 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  // Console do renderer espelhado em arquivo: sem isso, o app instalado nao
+  // deixa nenhum rastro do que aconteceu na maquina do usuario.
+  attachRendererLogging(window.webContents)
+
   window.on('ready-to-show', () => window.show())
 
   // Links externos nunca navegam dentro do app; nenhuma janela nova e criada
@@ -110,6 +115,7 @@ if (!gotTheLock) {
   void app.whenReady().then(() => {
     app.setAppUserModelId('com.pontin.zoidagoiaba')
 
+    startFileLogger()
     registerIpcHandlers()
     registerUpdaterIpc(() => mainWindow)
     registerDisplayMediaHandler()
@@ -121,6 +127,7 @@ if (!gotTheLock) {
     // Suspensao mata o websocket da sinalizacao sem avisar o renderer: ao voltar,
     // o app reverifica o registro do member peer e da porta da sala.
     powerMonitor.on('resume', () => {
+      logToFile('info', '[system] maquina voltou de suspensao')
       mainWindow?.webContents.send(IPC.systemResume)
     })
 

@@ -30,6 +30,7 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [openingLogs, setOpeningLogs] = useState(false)
 
   const save = async (): Promise<void> => {
     const validation = validateNickname(draft)
@@ -67,6 +68,17 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
       pushToast('warning', 'Nao foi possivel verificar atualizacoes agora.')
     } finally {
       setChecking(false)
+    }
+  }
+
+  const openLogs = async (): Promise<void> => {
+    setOpeningLogs(true)
+    try {
+      await window.zoi.logs.openFolder()
+    } catch {
+      pushToast('warning', 'Nao foi possivel abrir a pasta de logs.')
+    } finally {
+      setOpeningLogs(false)
     }
   }
 
@@ -128,6 +140,20 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
         </div>
         <Button size="sm" loading={checking} onClick={() => void checkUpdates()}>
           Verificar atualizacoes
+        </Button>
+      </div>
+
+      <div className="z-row-between" style={{ marginTop: 'var(--space-3)' }}>
+        <div>
+          <div className="z-secondary" style={{ fontSize: 'var(--text-secondary-size)' }}>
+            Diagnostico
+          </div>
+          <div className="z-secondary" style={{ fontSize: 'var(--text-meta)' }}>
+            O app guarda um arquivo por dia com o que aconteceu na sala.
+          </div>
+        </div>
+        <Button size="sm" loading={openingLogs} onClick={() => void openLogs()}>
+          Abrir pasta de logs
         </Button>
       </div>
     </Modal>

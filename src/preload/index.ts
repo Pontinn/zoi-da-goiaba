@@ -27,6 +27,9 @@ const api: ZoiApi = {
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke(IPC.appGetVersion)
   },
+  logs: {
+    openFolder: (): Promise<void> => ipcRenderer.invoke(IPC.logsOpenFolder)
+  },
   update: {
     check: (): Promise<void> => ipcRenderer.invoke(IPC.updateCheck),
     install: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall),

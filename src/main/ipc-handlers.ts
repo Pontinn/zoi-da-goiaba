@@ -1,5 +1,5 @@
 // Registro dos handlers IPC da SPEC secao 5.B (exceto `update:*`, no updater).
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import {
   IPC,
   type AppSettings,
@@ -9,6 +9,7 @@ import {
   type SettingsSetRequest
 } from '@shared/ipc'
 import { listSources, selectSource } from './capture'
+import { ensureLogDirectory } from './file-logger'
 import { getSettings, NicknameValidationError, setNickname } from './settings'
 
 export function registerIpcHandlers(): void {
@@ -36,4 +37,11 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(IPC.appGetVersion, (): string => app.getVersion())
+
+  ipcMain.handle(IPC.logsOpenFolder, async (): Promise<void> => {
+    // A pasta pode nao existir se nada foi gravado ainda: cria antes de abrir.
+    const directory = ensureLogDirectory()
+    const failure = await shell.openPath(directory)
+    if (failure) throw new Error(failure)
+  })
 }

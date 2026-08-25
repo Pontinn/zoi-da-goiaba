@@ -4,6 +4,7 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { IPC, type UpdateStatus } from '@shared/ipc'
+import { logToFile } from './file-logger'
 
 type WindowProvider = () => BrowserWindow | null
 
@@ -38,6 +39,7 @@ export function registerUpdaterIpc(getWindow: WindowProvider): void {
       await autoUpdater.checkForUpdates()
     } catch (error) {
       console.warn('[updater] checagem falhou:', error)
+      logToFile('warn', `[updater] checagem falhou: ${String(error)}`)
       sendStatus(status('error'))
     }
   })
@@ -54,6 +56,7 @@ export function registerUpdaterIpc(getWindow: WindowProvider): void {
       await autoUpdater.downloadUpdate()
     } catch (error) {
       console.warn('[updater] download falhou:', error)
+      logToFile('warn', `[updater] download falhou: ${String(error)}`)
       pendingInstall = false
       sendStatus(status('error'))
     }
@@ -94,6 +97,7 @@ export function startUpdater(): void {
   autoUpdater.on('error', (error) => {
     // Sem release publicada / sem rede: no-op silencioso com log (risco R9).
     console.warn('[updater] erro tratado como no-op:', error?.message ?? error)
+    logToFile('warn', `[updater] erro tratado como no-op: ${error?.message ?? String(error)}`)
     sendStatus(status('error'))
   })
 

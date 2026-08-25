@@ -7,6 +7,7 @@ export const IPC = {
   captureListSources: 'capture:list-sources',
   captureSelectSource: 'capture:select-source',
   appGetVersion: 'app:get-version',
+  logsOpenFolder: 'logs:open-folder',
   updateCheck: 'update:check',
   updateInstall: 'update:install',
   updateStatus: 'update:status',
@@ -96,6 +97,13 @@ export interface ZoiApi {
   }
   app: {
     getVersion(): Promise<string>
+  }
+  logs: {
+    /**
+     * Abre a pasta `userData/logs` no explorador de arquivos. E por onde o
+     * usuario pega o log do dia para mandar quando algo deu errado.
+     */
+    openFolder(): Promise<void>
   }
   update: {
     check(): Promise<void>
