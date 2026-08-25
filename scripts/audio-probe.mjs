@@ -161,7 +161,84 @@ async function runInsideElectron() {
   }
 
   process.stdout.write(`${JSON.stringify(results, null, 2)}\n`)
-  app.exit(results.fatal ? 1 : 0)
+
+  const failures = evaluate(results)
+  process.stderr.write('\n[audio-probe] resumo\n')
+  for (const check of failures.checks) {
+    process.stderr.write(`  ${check.ok ? 'OK   ' : 'FALHA'} ${check.name}\n`)
+  }
+  if (failures.failed.length > 0) {
+    process.stderr.write(
+      `\n[audio-probe] ${failures.failed.length} verificacao(oes) reprovada(s). ` +
+        'A invariante de seguranca (audio proibido nunca entra no mix) e o motivo ' +
+        'deste script existir: NAO siga com o build sem entender a falha.\n'
+    )
+  }
+  app.exit(results.fatal || failures.failed.length > 0 ? 1 : 0)
+}
+
+/**
+ * Converte os resultados brutos em aprovacao/reprovacao. E o que transforma a
+ * sonda de "relatorio para ler" em PORTAO: rodar `npm run audio:probe` depois de
+ * mexer no motor nativo e sair com codigo 1 significa regressao.
+ *
+ * `machineWasQuiet` de proposito NAO entra: e informativo, e o discriminante de
+ * sinal ja e imune a audio ambiente.
+ */
+function evaluate(results) {
+  const value = (object, path) =>
+    path.split('.').reduce((current, key) => (current == null ? undefined : current[key]), object)
+
+  const checks = [
+    { name: 'ativacao do WASAPI Process Loopback', ok: value(results, 'wasapiProcessLoopback.ok') },
+    {
+      name: 'MediaStreamTrackGenerator construido e alimentado',
+      ok: Boolean(
+        value(results, 'trackGenerator.constructed') && value(results, 'trackGenerator.wroteFrame')
+      )
+    },
+    {
+      name: 'transporte utilityProcess -> MessagePort -> renderer',
+      ok: Boolean(
+        value(results, 'utilityProcessTransport.portDeliveredToRenderer') &&
+        (value(results, 'utilityProcessTransport.messagesReceived') ?? []).length > 0
+      )
+    },
+    {
+      name: 'motor captura o audio permitido',
+      ok: value(results, 'captureEngine.verdict.captureWorks')
+    },
+    {
+      name: 'arvore proibida por PID raiz fica FORA do mix',
+      ok: value(results, 'captureEngine.verdict.rootPidExclusionWorks')
+    },
+    {
+      name: 'arvore proibida por nome de executavel fica FORA do mix',
+      ok: value(results, 'captureEngine.verdict.executableExclusionWorks')
+    },
+    {
+      name: 'processo permitido que nasce durante a captura entra',
+      ok: value(results, 'captureEngine.verdict.newAllowedProcessGetsCaptured')
+    },
+    {
+      name: 'processo proibido que nasce durante a captura NAO entra',
+      ok: value(results, 'captureEngine.verdict.newForbiddenProcessStaysOut')
+    },
+    {
+      name: 'endpoint-loopback ignora as listas de exclusao',
+      ok: value(results, 'captureEngine.verdict.endpointLoopbackIgnoresLists')
+    },
+    {
+      name: 'frames continuos (silencio tambem sai)',
+      ok: value(results, 'captureEngine.verdict.framesAreContinuous')
+    },
+    {
+      name: 'sem vazamento de handle em 10 ciclos',
+      ok: value(results, 'captureEngine.verdict.noHandleLeak')
+    }
+  ].map((check) => ({ ...check, ok: check.ok === true }))
+
+  return { checks, failed: checks.filter((check) => !check.ok) }
 }
 
 /** Ativacao real do Process Loopback pelo addon nativo, no processo main. */

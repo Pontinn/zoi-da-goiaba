@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CALL_METADATA_WAIT_MS, MEDIA_STALL_TIMEOUT_MS } from '@shared/config'
 import type { MediaConnection } from 'peerjs'
 import { createInitialState, type RoomState } from '@renderer/core/room-state'
-import { createDummyStream, MediaManager } from '@renderer/services/media-manager'
+import {
+  CaptureFailedError,
+  createDummyStream,
+  MediaManager
+} from '@renderer/services/media-manager'
 import type { Session } from '@renderer/services/session'
 
 type Handler = (arg: never) => void
@@ -807,5 +811,322 @@ describe('media-manager / stream ficticia da chamada reversa', () => {
     vi.stubGlobal('document', undefined)
     vi.stubGlobal('AudioContext', FakeAudioContext)
     expect(createDummyStream()).toBeNull()
+  })
+})
+
+// --- captura de audio com exclusao ----------------------------------------
+//
+// Estes casos protegem a decisao central do pipeline: com a exclusao ativa o
+// audio NAO vem mais do getDisplayMedia (`withAudio: false` nos dois lados) e
+// sim de uma track NOSSA, colocada na stream ANTES do announce. E por isso que
+// a chamada direta e a chamada reversa herdam o audio sem nenhum replaceTrack.
+
+class FakeMediaTrack {
+  contentHint = ''
+  stopped = false
+  private readonly listeners = new Map<string, (() => void)[]>()
+
+  constructor(readonly kind: TrackKind) {}
+
+  addEventListener(event: string, listener: () => void): void {
+    const list = this.listeners.get(event) ?? []
+    list.push(listener)
+    this.listeners.set(event, list)
+  }
+
+  stop(): void {
+    this.stopped = true
+  }
+
+  emit(event: string): void {
+    for (const listener of this.listeners.get(event) ?? []) listener()
+  }
+}
+
+/** MediaStream falsa com o pouco que o pipeline usa (inclui `addTrack`). */
+class FakeCaptureStream {
+  readonly tracks: FakeMediaTrack[]
+
+  constructor(kinds: TrackKind[]) {
+    this.tracks = kinds.map((kind) => new FakeMediaTrack(kind))
+  }
+
+  addTrack(track: FakeMediaTrack): void {
+    this.tracks.push(track)
+  }
+
+  getTracks(): FakeMediaTrack[] {
+    return this.tracks
+  }
+
+  getVideoTracks(): FakeMediaTrack[] {
+    return this.tracks.filter((track) => track.kind === 'video')
+  }
+
+  getAudioTracks(): FakeMediaTrack[] {
+    return this.tracks.filter((track) => track.kind === 'audio')
+  }
+}
+
+interface ExclusionStub {
+  client: { start: () => Promise<{ session: unknown; reason: string | null }> }
+  starts: number
+  stops: number
+  tracks: FakeMediaTrack[]
+}
+
+/** Stub do cliente de exclusao: devolve uma track propria ou recusa. */
+function exclusionStub(available: boolean): ExclusionStub {
+  const stub: ExclusionStub = {
+    starts: 0,
+    stops: 0,
+    tracks: [],
+    client: {
+      start: async () => {
+        stub.starts += 1
+        if (!available) return { session: null, reason: 'addon-load-failed' }
+        const track = new FakeMediaTrack('audio')
+        stub.tracks.push(track)
+        return {
+          session: {
+            track,
+            stop: () => {
+              stub.stops += 1
+            }
+          },
+          reason: null
+        }
+      }
+    }
+  }
+  return stub
+}
+
+interface CaptureCalls {
+  selectSource: { sourceId: string; withAudio: boolean }[]
+  displayMedia: { audio: unknown }[]
+}
+
+/**
+ * Instala `window.zoi` e `navigator.mediaDevices` falsos e devolve o que foi
+ * pedido a cada um. `displayMediaFails` simula o usuario cancelando o seletor.
+ */
+function stubCapture(displayMediaFails = false): CaptureCalls {
+  const calls: CaptureCalls = { selectSource: [], displayMedia: [] }
+  vi.stubGlobal('window', {
+    zoi: {
+      capture: {
+        selectSource: async (request: { sourceId: string; withAudio: boolean }) => {
+          calls.selectSource.push(request)
+        }
+      }
+    }
+  })
+  vi.stubGlobal('navigator', {
+    mediaDevices: {
+      getDisplayMedia: async (constraints: { audio: unknown }) => {
+        calls.displayMedia.push({ audio: constraints.audio })
+        if (displayMediaFails) throw new Error('usuario cancelou o seletor')
+        // O loopback do SO so entrega faixa de audio quando foi pedido.
+        return new FakeCaptureStream(constraints.audio ? ['video', 'audio'] : ['video'])
+      }
+    }
+  })
+  return calls
+}
+
+interface Announced {
+  txId: string
+  hasAudio: boolean
+}
+
+function transmittingSession(
+  announced: Announced[],
+  dialed: OutgoingRecord[],
+  stops: string[]
+): Session {
+  return {
+    getState: () => stateTransmittingLocally(),
+    notifyMediaFailure: () => {},
+    announceTransmissionStart: (payload: Announced) => announced.push(payload),
+    announceTransmissionStop: (reason: string) => stops.push(reason),
+    otherMemberPeerIds: () => ['dono'],
+    callPeer: (peerId: string, stream: unknown, metadata: OutgoingRecord['metadata']) => {
+      const fake = new FakeCall(peerId, metadata, new FakePeerConnection())
+      dialed.push({
+        peerId,
+        stream: stream as unknown as FakeOutStream,
+        metadata,
+        call: fake
+      })
+      return fake
+    }
+  } as unknown as Session
+}
+
+const START_OPTIONS = {
+  sourceId: 'screen:0',
+  sourceLabel: 'Tela 1',
+  sourceKind: 'screen' as const,
+  presetId: 'p720_30' as const,
+  withAudio: true
+}
+
+describe('media-manager / captura de audio com exclusao', () => {
+  let announced: Announced[]
+  let dialed: OutgoingRecord[]
+  let stops: string[]
+
+  beforeEach(() => {
+    announced = []
+    dialed = []
+    stops = []
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function managerWith(stub: ExclusionStub): {
+    manager: MediaManager
+    calls: CaptureCalls
+  } {
+    const calls = stubCapture()
+    const manager = new MediaManager(
+      transmittingSession(announced, dialed, stops),
+      createDummyStream,
+      stub.client as never
+    )
+    return { manager, calls }
+  }
+
+  it('com exclusao ativa o audio nao vem do getDisplayMedia', async () => {
+    const stub = exclusionStub(true)
+    const { manager, calls } = managerWith(stub)
+
+    const local = await manager.startTransmission(START_OPTIONS)
+
+    expect(stub.starts).toBe(1)
+    // Os DOIS lados precisam pedir sem audio: o loopback do SO traria o Discord.
+    expect(calls.selectSource[0]).toEqual({ sourceId: 'screen:0', withAudio: false })
+    expect(calls.displayMedia[0]?.audio).toBe(false)
+    expect(local.audioMode).toBe('excluded')
+    expect(local.hasAudio).toBe(true)
+    expect(local.stream.getAudioTracks()).toEqual([stub.tracks[0]])
+    manager.teardown()
+  })
+
+  it('a track gerada entra na stream ANTES do announce e das chamadas', async () => {
+    const stub = exclusionStub(true)
+    const { manager } = managerWith(stub)
+
+    const local = await manager.startTransmission(START_OPTIONS)
+
+    // Se a track entrasse depois, o announce iria com hasAudio falso e a
+    // chamada sairia sem m-line de audio.
+    expect(announced).toEqual([expect.objectContaining({ txId: local.txId, hasAudio: true })])
+    expect(dialed).toHaveLength(1)
+    expect(dialed[0]?.stream).toBe(local.stream)
+    manager.teardown()
+  })
+
+  it('sem exclusao disponivel degrada para o loopback do sistema inteiro', async () => {
+    const stub = exclusionStub(false)
+    const { manager, calls } = managerWith(stub)
+
+    const local = await manager.startTransmission(START_OPTIONS)
+
+    expect(stub.starts).toBe(1)
+    expect(calls.selectSource[0]).toEqual({ sourceId: 'screen:0', withAudio: true })
+    expect(calls.displayMedia[0]?.audio).toBe(true)
+    expect(local.audioMode).toBe('full-loopback')
+    expect(local.hasAudio).toBe(true)
+    expect(local.stopAudioExclusion).toBeNull()
+    manager.teardown()
+  })
+
+  it('transmitir sem audio nao arma exclusao nenhuma', async () => {
+    const stub = exclusionStub(true)
+    const { manager, calls } = managerWith(stub)
+
+    const local = await manager.startTransmission({ ...START_OPTIONS, withAudio: false })
+
+    expect(stub.starts).toBe(0)
+    expect(local.audioMode).toBe('none')
+    expect(local.hasAudio).toBe(false)
+    expect(calls.selectSource[0]?.withAudio).toBe(false)
+    manager.teardown()
+  })
+
+  it('parar a transmissao solta a captura de audio', async () => {
+    const stub = exclusionStub(true)
+    const { manager } = managerWith(stub)
+    await manager.startTransmission(START_OPTIONS)
+
+    manager.stopTransmission('manual')
+
+    expect(stub.stops).toBe(1)
+    expect(stops).toEqual(['manual'])
+    manager.teardown()
+  })
+
+  it('trocar de fonte rearma a exclusao inteira', async () => {
+    const stub = exclusionStub(true)
+    const { manager } = managerWith(stub)
+    const first = await manager.startTransmission(START_OPTIONS)
+
+    const second = await manager.switchSource({ ...START_OPTIONS, sourceId: 'screen:1' })
+
+    expect(stub.starts).toBe(2)
+    expect(stub.stops).toBe(1)
+    expect(second.txId).not.toBe(first.txId)
+    expect(second.audioMode).toBe('excluded')
+    expect(second.stream.getAudioTracks()).toEqual([stub.tracks[1]])
+    manager.teardown()
+  })
+
+  it('falha do getDisplayMedia nao deixa a captura de audio armada', async () => {
+    const stub = exclusionStub(true)
+    const calls = stubCapture(true)
+    const manager = new MediaManager(
+      transmittingSession(announced, dialed, stops),
+      createDummyStream,
+      stub.client as never
+    )
+
+    await expect(manager.startTransmission(START_OPTIONS)).rejects.toBeInstanceOf(
+      CaptureFailedError
+    )
+
+    expect(stub.starts).toBe(1)
+    expect(stub.stops).toBe(1)
+    expect(calls.displayMedia).toHaveLength(1)
+    manager.teardown()
+  })
+
+  it('teardown tambem solta a captura de audio', async () => {
+    const stub = exclusionStub(true)
+    const { manager } = managerWith(stub)
+    await manager.startTransmission(START_OPTIONS)
+
+    manager.teardown()
+
+    expect(stub.stops).toBe(1)
+  })
+
+  it('a chamada reversa responde com a MESMA stream, ja com o audio dentro', async () => {
+    const stub = exclusionStub(true)
+    const { manager } = managerWith(stub)
+    const local = await manager.startTransmission(START_OPTIONS)
+
+    // O espectador puxa a midia porque a chamada direta nao chegou nele.
+    const pull = new FakeCall('dono', { txId: local.txId, pull: true })
+    call(manager, pull)
+
+    expect(pull.answered).toBe(true)
+    // Identidade, nao equivalencia: e o que garante zero renegociacao.
+    expect(pull.answeredWith).toBe(local.stream)
+    expect((pull.answeredWith as FakeCaptureStream).getAudioTracks()).toEqual([stub.tracks[0]])
+    manager.teardown()
   })
 })

@@ -28,9 +28,7 @@ function sounds(effects: readonly Effect[]): SoundId[] {
 }
 
 function broadcasts(effects: readonly Effect[]): ProtocolMessage[] {
-  return effects
-    .filter((effect) => effect.kind === 'broadcast')
-    .map((effect) => effect.message)
+  return effects.filter((effect) => effect.kind === 'broadcast').map((effect) => effect.message)
 }
 
 function kinds(effects: readonly Effect[]): string[] {
@@ -117,7 +115,11 @@ describe('room-state / criacao e ingresso', () => {
   })
 
   it('ROOM_JOINED aplica o snapshot sem tocar som de "entrou" pelos ja presentes', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('b', 2), member('me', 3)], 'owner')
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('b', 2), member('me', 3)],
+      'owner'
+    )
     expect(state.phase).toBe('active')
     expect(state.members).toHaveLength(3)
     expect(state.announcedPeers).toEqual(['owner', 'b', 'me'])
@@ -336,13 +338,16 @@ describe('room-state / matriz de autorizacao 5c', () => {
       kind: 'MESSAGE',
       from: 'b',
       now: 1,
-      message: { type: 'JOIN_ACCEPT', payload: {
-        roomMeta: { code: 'x', limit: 2, createdAt: 0 },
-        rosterVersion: 99,
-        ownerPeerId: 'b',
-        members: [],
-        banList: []
-      } }
+      message: {
+        type: 'JOIN_ACCEPT',
+        payload: {
+          roomMeta: { code: 'x', limit: 2, createdAt: 0 },
+          rosterVersion: 99,
+          ownerPeerId: 'b',
+          members: [],
+          banList: []
+        }
+      }
     })
     expect(result.state.ownerPeerId).toBe('owner')
     expect(kinds(result.effects)).toEqual(['log'])
@@ -499,7 +504,12 @@ describe('room-state / transmissoes', () => {
 
 describe('room-state / reconexao de par (RF-40/RF-48)', () => {
   it('reconnecting congela a transmissao do par e a volta marca "reconectado"', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const started = reduce(state, {
       kind: 'MESSAGE',
       from: 'b',
@@ -546,7 +556,12 @@ describe('room-state / reconexao de par (RF-40/RF-48)', () => {
   })
 
   it('membro comum NAO remove par que segue no roster do dono: marca unreachable', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const withTx = reduce(state, {
       kind: 'MESSAGE',
       from: 'b',
@@ -573,7 +588,12 @@ describe('room-state / reconexao de par (RF-40/RF-48)', () => {
   })
 
   it('par que nunca conectou (RF-41) toca "erro-conexao" e vira unreachable sem retry', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const result = reduce(state, { kind: 'PEER_LINK_FAILED', peerId: 'b', now: 20_000 })
     expect(result.state.peerLinks['b']?.status).toBe('unreachable')
     expect(sounds(result.effects)).toEqual(['connectionError'])
@@ -588,8 +608,16 @@ describe('room-state / queda do dono e regra de handover (secao 2.7)', () => {
 
   it('o vencedor da eleicao assume, remove o dono caido e re-emite ROSTER_UPDATE', () => {
     const state = joinedState('me', roster, 'owner', 5)
-    const down = reduce(state, { kind: 'PEER_LINK_RECONNECTING', peerId: 'owner', now: 1_000 }).state
-    const result = reduce(down, { kind: 'PEER_LINK_RECONNECT_TIMEOUT', peerId: 'owner', now: 16_000 })
+    const down = reduce(state, {
+      kind: 'PEER_LINK_RECONNECTING',
+      peerId: 'owner',
+      now: 1_000
+    }).state
+    const result = reduce(down, {
+      kind: 'PEER_LINK_RECONNECT_TIMEOUT',
+      peerId: 'owner',
+      now: 16_000
+    })
 
     expect(result.state.ownerPeerId).toBe('me')
     expect(result.state.rosterVersion).toBe(6)
@@ -606,8 +634,16 @@ describe('room-state / queda do dono e regra de handover (secao 2.7)', () => {
 
   it('quem NAO venceu apenas espera o eleito', () => {
     const state = joinedState('c', roster, 'owner', 5)
-    const down = reduce(state, { kind: 'PEER_LINK_RECONNECTING', peerId: 'owner', now: 1_000 }).state
-    const result = reduce(down, { kind: 'PEER_LINK_RECONNECT_TIMEOUT', peerId: 'owner', now: 16_000 })
+    const down = reduce(state, {
+      kind: 'PEER_LINK_RECONNECTING',
+      peerId: 'owner',
+      now: 1_000
+    }).state
+    const result = reduce(down, {
+      kind: 'PEER_LINK_RECONNECT_TIMEOUT',
+      peerId: 'owner',
+      now: 16_000
+    })
     expect(result.state.ownerPeerId).toBe('owner')
     expect(result.state.members).toHaveLength(3)
     expect(kinds(result.effects)).toEqual(['log'])
@@ -615,7 +651,11 @@ describe('room-state / queda do dono e regra de handover (secao 2.7)', () => {
 
   it('aceita ROSTER_UPDATE do eleito quando (a)+(b)+(c) valem', () => {
     const state = joinedState('c', roster, 'owner', 5)
-    const down = reduce(state, { kind: 'PEER_LINK_RECONNECTING', peerId: 'owner', now: 1_000 }).state
+    const down = reduce(state, {
+      kind: 'PEER_LINK_RECONNECTING',
+      peerId: 'owner',
+      now: 1_000
+    }).state
     const result = reduce(down, {
       kind: 'MESSAGE',
       from: 'me',
@@ -701,7 +741,11 @@ describe('room-state / queda do dono e regra de handover (secao 2.7)', () => {
 
   it('REJEITA takeover de quem NAO e o vencedor deterministico (condicao a)', () => {
     const state = joinedState('me', roster, 'owner', 5)
-    const down = reduce(state, { kind: 'PEER_LINK_RECONNECTING', peerId: 'owner', now: 1_000 }).state
+    const down = reduce(state, {
+      kind: 'PEER_LINK_RECONNECTING',
+      peerId: 'owner',
+      now: 1_000
+    }).state
     const result = reduce(down, {
       kind: 'MESSAGE',
       from: 'c',
@@ -722,7 +766,11 @@ describe('room-state / queda do dono e regra de handover (secao 2.7)', () => {
 
   it('REJEITA handover com rosterVersion nao maior (condicao c)', () => {
     const state = joinedState('c', roster, 'owner', 5)
-    const down = reduce(state, { kind: 'PEER_LINK_RECONNECTING', peerId: 'owner', now: 1_000 }).state
+    const down = reduce(state, {
+      kind: 'PEER_LINK_RECONNECTING',
+      peerId: 'owner',
+      now: 1_000
+    }).state
     const result = reduce(down, {
       kind: 'MESSAGE',
       from: 'me',
@@ -796,8 +844,16 @@ describe('room-state / queda do dono e regra de handover (secao 2.7)', () => {
 
   it('ultimo membro restante encerra a sala quando o dono cai', () => {
     const state = joinedState('me', [member('owner', 1, true), member('me', 5)], 'owner', 5)
-    const down = reduce(state, { kind: 'PEER_LINK_RECONNECTING', peerId: 'owner', now: 1_000 }).state
-    const result = reduce(down, { kind: 'PEER_LINK_RECONNECT_TIMEOUT', peerId: 'owner', now: 16_000 })
+    const down = reduce(state, {
+      kind: 'PEER_LINK_RECONNECTING',
+      peerId: 'owner',
+      now: 1_000
+    }).state
+    const result = reduce(down, {
+      kind: 'PEER_LINK_RECONNECT_TIMEOUT',
+      peerId: 'owner',
+      now: 16_000
+    })
     expect(result.state.ownerPeerId).toBe('me')
     expect(result.state.members.map((entry) => entry.peerId)).toEqual(['me'])
   })
@@ -849,7 +905,12 @@ describe('room-state / moderacao do dono (RF-31/RF-33/RF-36)', () => {
   })
 
   it('moderacao por quem nao e dono e ignorada', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const result = reduce(state, { kind: 'OWNER_REMOVE', peerId: 'b', mode: 'ban', now: 100 })
     expect(result.state.members).toHaveLength(3)
     expect(kinds(result.effects)).toEqual(['log'])
@@ -863,7 +924,12 @@ describe('room-state / moderacao do dono (RF-31/RF-33/RF-36)', () => {
   })
 
   it('os DEMAIS participantes tocam "saiu" no kick/ban (AC-23 revisao 5)', () => {
-    const state = joinedState('c', [member('owner', 1, true), member('b', 2), member('c', 3)], 'owner', 5)
+    const state = joinedState(
+      'c',
+      [member('owner', 1, true), member('b', 2), member('c', 3)],
+      'owner',
+      5
+    )
     const result = reduce(state, {
       kind: 'MESSAGE',
       from: 'owner',
@@ -934,7 +1000,12 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
   })
 
   it('o sucessor assume ao receber OWNER_TRANSFER e remove o ex-dono no LEAVE', () => {
-    const state = joinedState('c', [member('owner', 1, true), member('b', 5), member('c', 2)], 'owner', 5)
+    const state = joinedState(
+      'c',
+      [member('owner', 1, true), member('b', 5), member('c', 2)],
+      'owner',
+      5
+    )
     const transferred = reduce(state, {
       kind: 'MESSAGE',
       from: 'owner',
@@ -1082,7 +1153,12 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
   })
 
   it('LEAVE recebido por membro comum apenas fecha a conexao (som vem do dono)', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const result = reduce(state, {
       kind: 'MESSAGE',
       from: 'b',
@@ -1098,7 +1174,12 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
 
 describe('room-state / nickname e qualidade', () => {
   it('NICKNAME_UPDATE altera apenas o nickname DO REMETENTE', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const result = reduce(state, {
       kind: 'MESSAGE',
       from: 'b',
@@ -1134,7 +1215,12 @@ describe('room-state / nickname e qualidade', () => {
   })
 
   it('QUALITY_UPDATE guarda a amostra por remetente com o instante de chegada', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const result = reduce(state, {
       kind: 'MESSAGE',
       from: 'b',
@@ -1153,7 +1239,12 @@ describe('room-state / nickname e qualidade', () => {
   })
 
   it('WATCHING_UPDATE alimenta o indicador quem-assiste-o-que (RF-37)', () => {
-    const state = joinedState('me', [member('owner', 1, true), member('me', 2), member('b', 3)], 'owner', 5)
+    const state = joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('b', 3)],
+      'owner',
+      5
+    )
     const result = reduce(state, {
       kind: 'MESSAGE',
       from: 'b',
@@ -1174,9 +1265,24 @@ describe('room-state / viewersOf (contagem de espectadores, RF-11)', () => {
 
   it('conta apenas quem assiste o txId pedido e ignora os nulls', () => {
     const state = reduceAll(joinedState('me', roster, 'owner', 5), [
-      { kind: 'MESSAGE', from: 'b', now: 1, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } } },
-      { kind: 'MESSAGE', from: 'c', now: 2, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't2' } } },
-      { kind: 'MESSAGE', from: 'owner', now: 3, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: null } } }
+      {
+        kind: 'MESSAGE',
+        from: 'b',
+        now: 1,
+        message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } }
+      },
+      {
+        kind: 'MESSAGE',
+        from: 'c',
+        now: 2,
+        message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't2' } }
+      },
+      {
+        kind: 'MESSAGE',
+        from: 'owner',
+        now: 3,
+        message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: null } }
+      }
     ]).state
 
     expect(viewersOf(state, 't1')).toBe(1)
@@ -1187,8 +1293,18 @@ describe('room-state / viewersOf (contagem de espectadores, RF-11)', () => {
   it('sobe e desce conforme os WATCHING_UPDATE chegam', () => {
     let state = joinedState('me', roster, 'owner', 5)
     state = reduceAll(state, [
-      { kind: 'MESSAGE', from: 'b', now: 1, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } } },
-      { kind: 'MESSAGE', from: 'c', now: 2, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } } }
+      {
+        kind: 'MESSAGE',
+        from: 'b',
+        now: 1,
+        message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } }
+      },
+      {
+        kind: 'MESSAGE',
+        from: 'c',
+        now: 2,
+        message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } }
+      }
     ]).state
     expect(viewersOf(state, 't1')).toBe(2)
 
@@ -1198,6 +1314,37 @@ describe('room-state / viewersOf (contagem de espectadores, RF-11)', () => {
       now: 3,
       message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: null } }
     }).state
+    expect(viewersOf(state, 't1')).toBe(1)
+  })
+
+  it('espectador que SAI da sala para de contar na hora', () => {
+    // A contagem do card e o unico numero que o transmissor ve sobre quem esta
+    // do outro lado: deixar um fantasma la seria mentira silenciosa.
+    // Do ponto de vista do DONO, que e quem aplica a saida no roster (o membro
+    // comum so atualiza quando o ROSTER_UPDATE do dono chega).
+    let state = reduceAll(ownerState(roster, 5), [
+      {
+        kind: 'MESSAGE',
+        from: 'b',
+        now: 1,
+        message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } }
+      },
+      {
+        kind: 'MESSAGE',
+        from: 'c',
+        now: 2,
+        message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } }
+      }
+    ]).state
+    expect(viewersOf(state, 't1')).toBe(2)
+
+    state = reduce(state, {
+      kind: 'MESSAGE',
+      from: 'c',
+      now: 3,
+      message: { type: 'LEAVE', payload: {} }
+    }).state
+
     expect(viewersOf(state, 't1')).toBe(1)
   })
 })
@@ -1216,7 +1363,12 @@ describe('room-state / sequencias completas', () => {
         rosterVersion: 5,
         now: 900
       },
-      { kind: 'MESSAGE', from: 'novo', now: 950, message: { type: 'HELLO', payload: { nickname: 'novo', joinedAt: 900 } } },
+      {
+        kind: 'MESSAGE',
+        from: 'novo',
+        now: 950,
+        message: { type: 'HELLO', payload: { nickname: 'novo', joinedAt: 900 } }
+      },
       {
         kind: 'MESSAGE',
         from: 'novo',
