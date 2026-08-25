@@ -1,18 +1,26 @@
 // Sonda executavel do Sprint 1 (spike) da feature app-audio-capture.
 //
 // Transforma o veredito ESTATICO do SPEC (secao 2.1) em evidencia real nesta
-// maquina. Responde quatro perguntas:
+// maquina. Responde cinco perguntas:
 //   1. o WASAPI Process Loopback ativa de verdade? (addon nativo `probe()`)
 //   2. o renderer do Electron 43 tem `MediaStreamTrackGenerator` usavel?
 //   3. o transporte utilityProcess -> MessagePort -> renderer funciona?
-//   4. informativo: o Chromium do Electron aceita `restrictOwnAudio`?
+//   4. o motor de exclusao realmente captura o permitido e nao captura o
+//      proibido? (reproduz um SINAL INAUDIVEL num processo separado e mede o PCM)
+//   5. informativo: o Chromium do Electron aceita `restrictOwnAudio`?
+//
+// A etapa 4 NAO produz som audivel: o sinal de teste e uma senoide de 1 Hz,
+// muito abaixo da faixa da audicao humana e impossivel de um alto-falante
+// reproduzir. Digitalmente ele e obvio (a media por bloco oscila ate a
+// amplitude do sinal), enquanto qualquer audio de verdade tem media zero.
+// NUNCA trocar por um tom audivel: esta e a maquina de trabalho do usuario.
 //
 // Rodar com `node scripts/audio-probe.mjs` (ou `npm run audio:probe`): fora do
 // Electron o script se re-executa dentro do Electron, sem janela visivel, e
 // imprime um JSON com os resultados brutos.
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -88,7 +96,8 @@ async function runInsideElectron() {
     trackGenerator: null,
     utilityProcessTransport: null,
     restrictOwnAudio: null,
-    electronLoopbackSurface: null
+    electronLoopbackSurface: null,
+    captureEngine: null
   }
 
   step('sonda WASAPI (addon nativo)')
@@ -133,6 +142,9 @@ async function runInsideElectron() {
       probeRestrictOwnAudio({ desktopCapturer, session, window }),
       30000
     )
+
+    step('sonda o motor de captura (exclusao real de arvore)')
+    results.captureEngine = await guarded(probeCaptureEngine(scratchDir), 180000)
 
     step('sonda a superficie de audio do setDisplayMediaRequestHandler')
     results.electronLoopbackSurface = await guarded(
@@ -426,6 +438,295 @@ async function guarded(promise, timeoutMs) {
     return await withTimeout(promise, timeoutMs, `etapa excedeu ${timeoutMs} ms`)
   } catch (error) {
     return { timedOut: true, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * Exercicio REAL do motor nativo (Sprint 2). Um processo separado (powershell)
+ * reproduz o sinal inaudivel de 1 Hz e a sonda mede o PCM entregue:
+ *   - listas vazias: o sinal PRECISA aparecer (a captura funciona);
+ *   - arvore proibida por PID raiz: o sinal NAO pode aparecer (deteccao por
+ *     ancestralidade, que e exatamente o caso do Discord);
+ *   - arvore proibida por nome de executavel: idem;
+ *   - processo permitido/proibido que nasce COM a captura ja rodando;
+ *   - endpoint-loopback: o sinal aparece mesmo com as listas (sao ignoradas).
+ * Mede tambem a continuidade dos frames e vazamento de handles em 10 ciclos.
+ */
+async function probeCaptureEngine(scratchDir) {
+  const addon = require('zoi-audio-capture')
+  const tonePath = join(scratchDir, 'probe-signal.wav')
+  writeSilentProbeWav(tonePath, 8, 0.25)
+
+  const baseConfig = {
+    excludedExecutables: [],
+    excludedRootPids: [],
+    sampleRate: 48000,
+    channels: 2,
+    frameMs: 10
+  }
+
+  const result = { discordRunning: listDiscordPids() }
+
+  // Referencia de silencio: se a maquina ja estiver tocando alguma coisa, os
+  // testes de exclusao ficam inconclusivos e isso precisa aparecer.
+  result.baselineSilence = await captureFor(
+    addon,
+    { ...baseConfig, mode: 'process-exclusion' },
+    1500
+  )
+
+  result.allowedTreeCaptured = await captureWhilePlaying(addon, tonePath, {
+    ...baseConfig,
+    mode: 'process-exclusion'
+  })
+
+  result.forbiddenByRootPid = await captureWhilePlaying(addon, tonePath, {
+    ...baseConfig,
+    mode: 'process-exclusion',
+    excludedRootPids: [process.pid]
+  })
+
+  result.forbiddenByExecutable = await captureWhilePlaying(addon, tonePath, {
+    ...baseConfig,
+    mode: 'process-exclusion',
+    excludedExecutables: ['powershell.exe']
+  })
+
+  result.endpointLoopback = await captureWhilePlaying(addon, tonePath, {
+    ...baseConfig,
+    mode: 'endpoint-loopback',
+    excludedRootPids: [process.pid],
+    excludedExecutables: ['powershell.exe']
+  })
+
+  result.allowedAppearsDuringCapture = await captureWithMidStart(addon, tonePath, {
+    ...baseConfig,
+    mode: 'process-exclusion'
+  })
+
+  result.forbiddenAppearsDuringCapture = await captureWithMidStart(addon, tonePath, {
+    ...baseConfig,
+    mode: 'process-exclusion',
+    excludedExecutables: ['powershell.exe']
+  })
+
+  // So faz sentido se o Discord estiver rodando E tocando algo agora.
+  result.discordExcluded =
+    result.discordRunning.length > 0
+      ? await captureFor(
+          addon,
+          {
+            ...baseConfig,
+            mode: 'process-exclusion',
+            excludedExecutables: ['discord.exe', 'discordptb.exe', 'discordcanary.exe']
+          },
+          3000
+        )
+      : null
+
+  result.startStopCycles = await runStartStopCycles(addon, {
+    ...baseConfig,
+    mode: 'process-exclusion'
+  })
+
+  // `signalLevel` (media absoluta por frame de 10 ms) e imune a musica ou voz
+  // tocando na maquina: qualquer audio de verdade tem media zero, so o sinal
+  // de 1 Hz produz media alta. Da para julgar mesmo com o PC fazendo barulho.
+  const ambient = result.baselineSilence.signalLevel
+  const withSignal = result.allowedTreeCaptured.signalLevel
+  const floor = Math.max(ambient * 3, withSignal * 0.25, 0.01)
+  result.verdict = {
+    ambientSignalLevel: ambient,
+    capturedSignalLevel: withSignal,
+    detectionFloor: floor,
+    machineWasQuiet: result.baselineSilence.rms < 0.005,
+    captureWorks: withSignal > floor,
+    rootPidExclusionWorks: result.forbiddenByRootPid.signalLevel < floor,
+    executableExclusionWorks: result.forbiddenByExecutable.signalLevel < floor,
+    endpointLoopbackIgnoresLists: result.endpointLoopback.signalLevel > floor,
+    newAllowedProcessGetsCaptured: result.allowedAppearsDuringCapture.signalLevel > floor,
+    newForbiddenProcessStaysOut: result.forbiddenAppearsDuringCapture.signalLevel < floor,
+    framesAreContinuous: result.baselineSilence.frames >= 130,
+    noHandleLeak:
+      result.startStopCycles.handleDelta !== null && result.startStopCycles.handleDelta < 50
+  }
+
+  return result
+}
+
+/**
+ * WAV PCM16 mono com uma senoide de 1 Hz: INAUDIVEL (abaixo dos 20 Hz da
+ * audicao e da faixa fisica de qualquer alto-falante), mas trivial de detectar
+ * no PCM porque a media por bloco curto acompanha a amplitude do sinal.
+ */
+function writeSilentProbeWav(path, seconds, amplitude) {
+  const frequency = 1
+  const sampleRate = 48000
+  const frames = sampleRate * seconds
+  const dataBytes = frames * 2
+  const buffer = Buffer.alloc(44 + dataBytes)
+  buffer.write('RIFF', 0, 'ascii')
+  buffer.writeUInt32LE(36 + dataBytes, 4)
+  buffer.write('WAVE', 8, 'ascii')
+  buffer.write('fmt ', 12, 'ascii')
+  buffer.writeUInt32LE(16, 16)
+  buffer.writeUInt16LE(1, 20)
+  buffer.writeUInt16LE(1, 22)
+  buffer.writeUInt32LE(sampleRate, 24)
+  buffer.writeUInt32LE(sampleRate * 2, 28)
+  buffer.writeUInt16LE(2, 32)
+  buffer.writeUInt16LE(16, 34)
+  buffer.write('data', 36, 'ascii')
+  buffer.writeUInt32LE(dataBytes, 40)
+  for (let index = 0; index < frames; index += 1) {
+    const sample = Math.sin((2 * Math.PI * frequency * index) / sampleRate) * amplitude
+    buffer.writeInt16LE(Math.round(sample * 32767), 44 + index * 2)
+  }
+  writeFileSync(path, buffer)
+}
+
+/** Reproduz o sinal num processo FILHO (logo, dentro da arvore desta sonda). */
+function startTonePlayer(wavPath) {
+  return spawn(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$player = New-Object Media.SoundPlayer '${wavPath}'; $player.PlaySync()`
+    ],
+    { stdio: 'ignore', windowsHide: true }
+  )
+}
+
+async function captureWhilePlaying(addon, wavPath, config) {
+  const player = startTonePlayer(wavPath)
+  // Deixa a sessao de audio do player existir antes de medir.
+  await new Promise((resolve) => setTimeout(resolve, 1200))
+  const stats = await captureFor(addon, config, 3000)
+  player.kill()
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  return stats
+}
+
+/**
+ * O caso que mais importa: o processo aparece DEPOIS que a captura ja comecou
+ * (e o cenario "Discord reaberto durante a transmissao"). Prova as redes de
+ * OnSessionCreated e do vigia de 1 s.
+ */
+async function captureWithMidStart(addon, wavPath, config) {
+  let player = null
+  const stats = await captureFor(addon, config, 4500, () => {
+    setTimeout(() => {
+      player = startTonePlayer(wavPath)
+    }, 1000)
+  })
+  if (player) player.kill()
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  return stats
+}
+
+function captureFor(addon, config, durationMs, onStarted) {
+  return new Promise((resolve, reject) => {
+    const stats = {
+      frames: 0,
+      samples: 0,
+      peak: 0,
+      rms: 0,
+      /** Maior media absoluta de um frame de 10 ms: assinatura do sinal de 1 Hz. */
+      signalLevel: 0,
+      firstTimestampUs: null,
+      lastTimestampUs: null,
+      statuses: []
+    }
+    let sumSquares = 0
+
+    const onPcm = (data, timestampUs) => {
+      const view = new Float32Array(data)
+      stats.frames += 1
+      stats.samples += view.length
+      if (stats.firstTimestampUs === null) stats.firstTimestampUs = timestampUs
+      stats.lastTimestampUs = timestampUs
+      let sum = 0
+      for (let index = 0; index < view.length; index += 1) {
+        const value = view[index]
+        const magnitude = value < 0 ? -value : value
+        if (magnitude > stats.peak) stats.peak = magnitude
+        sumSquares += value * value
+        sum += value
+      }
+      const frameMean = Math.abs(sum / view.length)
+      if (frameMean > stats.signalLevel) stats.signalLevel = frameMean
+    }
+    const onStatus = (state, detail) => {
+      stats.statuses.push({ state, detail })
+    }
+
+    let handle
+    try {
+      handle = addon.start(config, onPcm, onStatus)
+    } catch (error) {
+      reject(error)
+      return
+    }
+
+    if (onStarted) onStarted()
+
+    setTimeout(() => {
+      addon.stop(handle)
+      stats.rms = stats.samples > 0 ? Math.sqrt(sumSquares / stats.samples) : 0
+      resolve(stats)
+    }, durationMs)
+  })
+}
+
+/** 10 ciclos start/stop: um vazamento de handle apareceria como salto grande. */
+async function runStartStopCycles(addon, config) {
+  const before = readHandleCount(process.pid)
+  for (let cycle = 0; cycle < 10; cycle += 1) {
+    const handle = addon.start(
+      config,
+      () => {},
+      () => {}
+    )
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    addon.stop(handle)
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+  const after = readHandleCount(process.pid)
+  return {
+    cycles: 10,
+    handlesBefore: before,
+    handlesAfter: after,
+    handleDelta: before !== null && after !== null ? after - before : null
+  }
+}
+
+function readHandleCount(pid) {
+  try {
+    const output = execSync(
+      `powershell.exe -NoProfile -NonInteractive -Command "(Get-Process -Id ${pid}).HandleCount"`,
+      { encoding: 'utf8', windowsHide: true }
+    )
+    const value = Number.parseInt(output.trim(), 10)
+    return Number.isFinite(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function listDiscordPids() {
+  try {
+    const output = execSync(
+      'powershell.exe -NoProfile -NonInteractive -Command "Get-Process discord* -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"',
+      { encoding: 'utf8', windowsHide: true }
+    )
+    return output
+      .split(/\s+/)
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isFinite(value))
+  } catch {
+    return []
   }
 }
 

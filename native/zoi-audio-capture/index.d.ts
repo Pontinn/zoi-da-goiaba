@@ -27,8 +27,19 @@ export type StatusListener = (state: string, detail: string) => void
  */
 export function probe(): ProbeResult
 
-/** Nao implementado ate o Sprint 2: lanca `not-implemented`. */
+/**
+ * Sobe o motor de captura e devolve o handle da sessao.
+ *
+ * Em `process-exclusion` o mix e composto por capturas INCLUDE ancoradas no
+ * PROPRIO PID de cada sessao de audio permitida; nenhuma arvore proibida ganha
+ * captura. Em `endpoint-loopback` as listas de exclusao sao IGNORADAS (loopback
+ * classico do endpoint padrao, usado como rede de seguranca da degradacao).
+ *
+ * `onPcm` recebe um frame a cada `frameMs`, SEMPRE (silencio incluido), com
+ * float32 interleaved e `timestampUs` acumulado por contagem de amostras.
+ * `onStatus` recebe `'active'` ou `'failed'` com um detalhe tecnico curto.
+ */
 export function start(options: StartOptions, onPcm: PcmListener, onStatus: StatusListener): number
 
-/** Nao implementado ate o Sprint 2: lanca `not-implemented`. */
+/** Derruba a captura do handle. Idempotente: handle desconhecido e no-op. */
 export function stop(handle: number): void

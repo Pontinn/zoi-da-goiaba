@@ -2,7 +2,12 @@
   "targets": [
     {
       "target_name": "zoi_audio_capture",
-      "sources": ["src/addon.cc"],
+      "sources": [
+        "src/addon.cc",
+        "src/capture_engine.cc",
+        "src/mixer.cc",
+        "src/session_tracker.cc"
+      ],
       "include_dirs": ["<!(node -p \"require('node-addon-api').include_dir\")"],
       "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS", "UNICODE", "_UNICODE", "NOMINMAX"],
       "conditions": [

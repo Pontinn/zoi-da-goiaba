@@ -51,7 +51,7 @@ N/A por acao de sala: escolha e automatica (ou local do transmissor, no caso do 
 ## 8. Casos de borda / caminhos tristes
 
 - Par com versao antiga (so VP8): negociacao tem que cair pra VP8 sem falha visivel.
-- Encoder de hardware presente mas com bug de driver (tela preta/artefatos): precisa de caminho de escape (config? deteccao?).
+- Encoder de hardware presente mas com bug de driver (tela preta/artefatos): precisa de caminho de escape (config? deteccao?). REFERENCIA CRUZADA (2026-08-25): a feature `black-screen-notice` (`.forge/ideas/black-screen-notice/`) foi criada para detectar ausencia de quadros no lado de quem assiste e avisar o espectador, e por decisao do usuario e feita ANTES desta. Ela cobre parcialmente este caso de borda e serve de INSTRUMENTO DE DIAGNOSTICO da troca de codec: com ela pronta, da para distinguir "nenhum quadro chegou" de "chegou e o driver cuspiu lixo". A leitura de getStats do lado RECEPTOR estabelecida la deve ser reaproveitada aqui (P1 desta ideia ja planeja ler encoderImplementation e qualityLimitationReason), em vez de criar uma estrutura paralela.
 - Pull (chamada reversa): a preferencia de codec vale para a resposta do transmissor tambem.
 - Troca de fonte/preset no meio da transmissao: renegociacao mantem o codec.
 - CPU alta no transmissor durante AV1 software: criterio para nao escolher (ou rebaixar).
