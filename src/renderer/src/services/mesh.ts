@@ -161,7 +161,10 @@ export class Mesh {
     const entry = this.entries.get(peerId)
     if (!entry) return
     this.entries.delete(peerId)
-    entry.connection.close({ flush: true })
+    // `flush` so faz sentido em canal ABERTO: num canal que nunca abriu (re-dial
+    // de par caido) o peerjs tenta enviar assim mesmo e loga erro.
+    if (entry.connection.open) entry.connection.close({ flush: true })
+    else entry.connection.close()
   }
 
   closeAll(): void {

@@ -14,6 +14,13 @@ export const HEARTBEAT_TIMEOUT_MS = 6_000
 /** Tempo maximo para um par NOVO fechar a conexao de mesh (RF-41). */
 export const MESH_CONNECT_TIMEOUT_MS = 20_000
 
+/**
+ * Nova tentativa de dial enquanto o par novo ainda nao fechou o mesh. Serve para
+ * nao depender de uma unica oferta e, principalmente, para ouvir do servidor de
+ * sinalizacao que o par ja nao existe (`peer-unavailable`).
+ */
+export const MESH_CONNECT_RETRY_INTERVAL_MS = 5_000
+
 /** Re-dial durante a janela de reconexao. */
 export const RECONNECT_REDIAL_INTERVAL_MS = 3_000
 

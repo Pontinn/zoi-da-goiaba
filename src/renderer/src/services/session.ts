@@ -149,9 +149,11 @@ export class Session {
       },
       onMemberError: (type, message) => {
         for (const listener of this.memberErrorListeners) listener(type, message)
-        if (type !== 'peer-unavailable') {
-          console.warn('[session] erro do member peer:', type, message)
+        if (type === 'peer-unavailable') {
+          this.handlePeerUnavailable(message)
+          return
         }
+        console.warn('[session] erro do member peer:', type, message)
       }
     })
 
@@ -527,6 +529,20 @@ export class Session {
     } catch (error) {
       console.warn(`[session] nao foi possivel rediscar para ${peerId}:`, error)
     }
+  }
+
+  /**
+   * `peer-unavailable` e a resposta da sinalizacao para "esse peer nao existe".
+   * O erro do PeerJS traz o peerId no texto, entao o alvo e identificado por
+   * comparacao com o roster (nao dependemos da redacao da mensagem). Se for um
+   * membro, o link com ele deixa de ser "nunca conectou" e passa a ser queda.
+   */
+  private handlePeerUnavailable(message: string): void {
+    const target = this.state.members.find(
+      (member) => member.peerId !== this.state.selfPeerId && message.includes(member.peerId)
+    )
+    if (!target) return
+    this.reconnection.markGone(target.peerId)
   }
 
   private handleMeshMessage(from: string, message: ProtocolMessage): void {

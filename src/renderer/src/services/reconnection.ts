@@ -4,6 +4,7 @@
 import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_TIMEOUT_MS,
+  MESH_CONNECT_RETRY_INTERVAL_MS,
   MESH_CONNECT_TIMEOUT_MS,
   RECONNECT_REDIAL_INTERVAL_MS,
   RECONNECT_WINDOW_MS,
@@ -109,6 +110,21 @@ export class ReconnectionManager {
   }
 
   /**
+   * A sinalizacao respondeu que o par NAO EXISTE mais (`peer-unavailable`), ou
+   * seja, o processo dele morreu. Isso separa dois casos que o timer de 20s
+   * confundia: o par que MORREU entra na janela de 15s do RF-40 (e o dono o
+   * remove do roster no fim dela), enquanto o par que existe mas nao fecha ICE
+   * (NAT simetrico, RF-41) segue no caminho de "nunca conectou".
+   */
+  markGone(peerId: string): void {
+    const link = this.links.get(peerId)
+    // So a fase 'connecting' precisa da correcao: 'up' e detectado pelo
+    // heartbeat em 6s e as outras ja estao na janela ou fora dela.
+    if (!link || link.phase !== 'connecting') return
+    this.beginReconnecting(link)
+  }
+
+  /**
    * Par inalcancavel que continua no roster do dono (conectividade assimetrica):
    * retentativa em background a cada 10s enquanto ele permanecer no roster.
    */
@@ -168,6 +184,13 @@ export class ReconnectionManager {
             link.phase = 'unreachable'
             link.backgroundRetry = false
             this.callbacks.onConnectFailed(link.peerId)
+            break
+          }
+          // Uma nova oferta dentro da janela de 20s: cobre a oferta perdida e
+          // faz a sinalizacao dizer se o par ainda existe (ver `markGone`).
+          if (now - link.lastRedialAt >= MESH_CONNECT_RETRY_INTERVAL_MS) {
+            link.lastRedialAt = now
+            this.callbacks.redial(link.peerId)
           }
           break
 
