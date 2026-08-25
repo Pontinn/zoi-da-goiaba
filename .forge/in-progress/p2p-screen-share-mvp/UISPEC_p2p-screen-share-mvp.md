@@ -57,7 +57,7 @@ App: **Zói da Goiaba** (exibicao com acento). Personalidade: zoeira entre amigo
 ## 2b. Assets de marca (aprovados pelo usuario em 2026-08-24)
 
 - `logo/icone.png` (1365x1365, quadrado roxo arredondado com transparencia): fonte UNICA do icone do app. Gerar dele o `.ico` multi-tamanho (256/128/64/48/32/16) do instalador/atalhos/barra de tarefas.
-- `logo/logo-goiaba.png` (recorte transparente da goiaba + arcos de sinal): logomarca DENTRO do app. Usos: tela de primeira abertura e home (marca na tela inicial), e discretamente em cantos de interface. NAO esticar, nao recolorir, fundo sempre transparente.
+- `logo/logo-goiaba.png` (recorte transparente da goiaba + arcos de sinal): logomarca DENTRO do app. Usos: tela de primeira abertura e home (marca na tela inicial), e discretamente em cantos de interface. NAO esticar, nao recolorir, fundo sempre transparente. Na HOME sao DUAS camadas (pedido do usuario 2026-08-24): (1) hero COLORIDA no lado direito (~30-40% da altura, parallax de mouse); (2) marca d'agua de FUNDO: goiaba gigante (70-110% da altura) em silhueta cinza, opacidade ~0.05-0.10, ancorada num canto e CORTADA pela borda da tela, atras de tudo, sem atrapalhar leitura. Fora da home, sempre colorida.
 - `logo/Gemini_Generated_Image_*.jpg`: arte original bruta; nao usar diretamente.
 
 ## 3. Componentes (inventario canonico)
