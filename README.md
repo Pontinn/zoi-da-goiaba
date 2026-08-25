@@ -83,7 +83,7 @@ Prioridades de projeto, nesta ordem:
 - Controle de volume local por espectador
 - Moderação pelo dono da sala (desconectar e banir), com transferência automática em caso de queda
 - Reconexão automática, com janela de tolerância de 15 segundos
-- Sons próprios de notificação e saudações variadas na abertura
+- Sons de notificação próprios, gravados na boca pelo próprio criador, e saudações variadas na abertura
 - Atualização automática via GitHub Releases
 
 ## Instalação
@@ -143,4 +143,4 @@ para sinalização e nenhum backend próprio.
 ---
 
 <sub>Projeto pessoal de um grupo de amigos, fornecido sem garantias. Use por sua
-conta e risco. Quanto ao nome: é piada interna, e vai continuar assim.</sub>
+conta e risco. Quanto ao nome (e aos sons): é piada interna, e vai continuar assim.</sub>
