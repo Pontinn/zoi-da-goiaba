@@ -251,3 +251,11 @@ export function AlertIcon({ size = 16, className }: IconProps): JSX.Element {
     </svg>
   )
 }
+
+export function GoIcon({ size = 16, className }: IconProps): JSX.Element {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M4 12h15M13 6l6 6-6 6" />
+    </svg>
+  )
+}

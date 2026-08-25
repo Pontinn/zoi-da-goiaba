@@ -455,6 +455,43 @@ describe('room-state / transmissoes', () => {
     expect(sounds(stopped.effects)).toEqual(['stoppedTransmitting'])
     expect(stopped.state.transmissions).toEqual({})
   })
+
+  it('TX_START nao muta o mapa de transmissoes do estado anterior (imutabilidade)', () => {
+    // A UI decide re-render por identidade: escrever no objeto antigo faria a
+    // grade de miniaturas nunca aparecer.
+    const before = state()
+    const local = reduce(before, {
+      kind: 'LOCAL_TX_START',
+      txId: 'meu',
+      presetId: 'p720_30',
+      hasAudio: false,
+      sourceKind: 'screen',
+      sourceLabel: 'Tela 1',
+      now: 40
+    })
+    expect(before.transmissions).toEqual({})
+    expect(local.state.transmissions).not.toBe(before.transmissions)
+
+    const remote = reduce(local.state, {
+      kind: 'MESSAGE',
+      from: 'b',
+      now: 45,
+      message: {
+        type: 'TX_START',
+        payload: {
+          txId: 'dele',
+          presetId: 'p720_30',
+          hasAudio: false,
+          sourceKind: 'screen',
+          sourceLabel: 'Tela 2',
+          startedAt: 45
+        }
+      }
+    })
+    expect(Object.keys(local.state.transmissions)).toEqual(['meu'])
+    expect(remote.state.transmissions).not.toBe(local.state.transmissions)
+    expect(Object.keys(remote.state.transmissions).sort()).toEqual(['dele', 'meu'])
+  })
 })
 
 // --- reconexao e timeout ---------------------------------------------------

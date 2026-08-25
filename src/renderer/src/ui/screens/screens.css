@@ -106,41 +106,334 @@
 
 /* --- Tela 2: home -------------------------------------------------------- */
 
+/**
+ * Atmosfera da home: brilho radial estatico + nevoa roxa deslocando MUITO devagar
+ * (so transform) + vinheta. Sem `filter`: o borrado vem do proprio gradiente.
+ * Nao ha video nesta tela, entao o movimento lento e permitido.
+ */
+.z-home {
+  position: relative;
+}
+
+.z-atmos {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.z-home > *:not(.z-atmos) {
+  position: relative;
+  z-index: 1;
+}
+
+.z-atmos__glow {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 1100px;
+  height: 700px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, #9d00ff1f, #9d00ff00 100%);
+}
+
+.z-atmos__blob {
+  position: absolute;
+  width: 620px;
+  height: 620px;
+  border-radius: 50%;
+  opacity: 0.09;
+  background: radial-gradient(closest-side, #b23dff, #b23dff00 100%);
+  will-change: transform;
+}
+
+.z-atmos__blob--1 {
+  left: -160px;
+  top: -140px;
+  animation: z-drift-a 42s ease-in-out infinite;
+}
+
+.z-atmos__blob--2 {
+  right: -200px;
+  top: 24%;
+  opacity: 0.07;
+  animation: z-drift-b 56s ease-in-out infinite;
+}
+
+.z-atmos__blob--3 {
+  left: 28%;
+  bottom: -280px;
+  width: 720px;
+  height: 720px;
+  opacity: 0.05;
+  animation: z-drift-c 64s ease-in-out infinite;
+}
+
+@keyframes z-drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: translate3d(90px, 60px, 0);
+  }
+}
+
+@keyframes z-drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: translate3d(-70px, 90px, 0);
+  }
+}
+
+@keyframes z-drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: translate3d(60px, -70px, 0);
+  }
+}
+
+.z-atmos__vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 90% at 50% 45%, #00000000 40%, #000000a6 100%);
+}
+
+/* --- Heroi da home ------------------------------------------------------- */
+
+.z-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  margin-bottom: var(--space-4);
+}
+
+.z-hero__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.z-hero__greeting {
+  margin: 0;
+  font-size: var(--text-brand);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.z-hero__name {
+  color: var(--accent-hover);
+}
+
+.z-hero__tagline {
+  margin: 0;
+  font-size: var(--text-subtitle);
+  color: var(--text-secondary);
+}
+
+.z-hero__art {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36vh;
+  height: 36vh;
+  max-width: 300px;
+  max-height: 300px;
+}
+
+.z-hero__halo {
+  position: absolute;
+  inset: -14%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, #9d00ff2b, #9d00ff00 100%);
+}
+
+/* Goiaba do heroi: cor original, sem recolorir (UISPEC secao 2b). */
+.z-hero__goiaba {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0.95;
+  user-select: none;
+  -webkit-user-drag: none;
+  will-change: transform;
+}
+
+/**
+ * Marca dagua de fundo: goiaba GRANDE em silhueta cinza, ancorada no canto
+ * inferior esquerdo e cortada pela viewport de proposito. Excecao de recolorir
+ * autorizada pelo usuario SO para esta camada.
+ */
+.z-atmos__watermark {
+  position: absolute;
+  left: -16vh;
+  bottom: -22vh;
+  height: 96vh;
+  width: auto;
+  opacity: 0.07;
+  filter: grayscale(1) brightness(1.15);
+  user-select: none;
+  -webkit-user-drag: none;
+  will-change: transform;
+}
+
 .z-home__actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4);
 }
 
-.z-action {
+.z-home__foot {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-6);
-  min-height: 172px;
-  text-align: left;
-  background: var(--bg-surface);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.z-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
   border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  font-size: var(--text-secondary-size);
+}
+
+/**
+ * Card de acao da home. A moldura de 2px e o FUNDO do botao; o conteudo fica em
+ * `.z-action__inner`, que cobre tudo menos a moldura. No hover, um segmento roxo
+ * (conic-gradient girado por transform, GPU) da uma volta e a moldura assenta em
+ * roxo solido. Uma unica volta, so no hover, e nesta tela nao ha video.
+ */
+.z-action {
+  position: relative;
+  display: block;
+  padding: 2px;
+  min-height: 176px;
+  border: 0;
   border-radius: var(--radius-card);
+  background: var(--border);
   color: var(--text-primary);
   cursor: pointer;
+  overflow: hidden;
+  text-align: left;
   transition:
     transform var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    background-color var(--dur-fast) var(--ease);
+    background-color var(--dur-enter) var(--ease);
 }
 
 .z-action:hover {
   transform: translateY(-2px);
-  border-color: var(--accent);
-  background: var(--bg-hover);
+  background: var(--accent);
+  transition-delay: 0ms, 700ms;
 }
 
 .z-action:focus-visible {
   outline: none;
-  border-color: var(--accent);
+  background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.z-action__ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 170%;
+  aspect-ratio: 1;
+  margin: -85% 0 0 -85%;
+  opacity: 0;
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg,
+    #9d00ff00 0deg,
+    #9d00ff00 210deg,
+    #9d00ff66 290deg,
+    var(--accent-hover) 350deg,
+    #9d00ff00 360deg
+  );
+}
+
+.z-action:hover .z-action__ring {
+  animation: z-ring-sweep 780ms var(--ease) 1 both;
+}
+
+@keyframes z-ring-sweep {
+  0% {
+    opacity: 0;
+    transform: rotate(0deg);
+  }
+
+  12% {
+    opacity: 1;
+  }
+
+  82% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: rotate(360deg);
+  }
+}
+
+.z-action__inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-6);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.z-action:hover .z-action__inner {
+  background: var(--bg-hover);
+}
+
+/* Realce radial que segue o cursor dentro do card (posicao por custom property). */
+.z-action__glow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    220px circle at var(--mx, 50%) var(--my, 50%),
+    #9d00ff2e,
+    #9d00ff00 70%
+  );
+  transition: opacity var(--dur-enter) var(--ease);
+}
+
+.z-action:hover .z-action__glow {
+  opacity: 1;
+}
+
+.z-action__icon,
+.z-action__title,
+.z-action__desc {
+  position: relative;
 }
 
 .z-action__icon {

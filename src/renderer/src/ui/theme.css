@@ -214,10 +214,72 @@ select {
   }
 }
 
+@keyframes z-logo-in {
+  from {
+    opacity: 0;
+    transform: scale(0.88) translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes z-slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Transicao de tela: fade + subida leve, 240ms (UISPEC secao 2). */
 .z-screen-enter {
   animation: z-fade-rise var(--dur-screen) var(--ease) both;
 }
 
 .z-fade-enter {
   animation: z-fade-in var(--dur-enter) var(--ease) both;
+}
+
+/**
+ * Entrada escalonada de listas (participantes, miniaturas). Um unico disparo por
+ * montagem: nada continua perto do video. O atraso vem de `--z-delay` inline.
+ */
+.z-item-enter {
+  animation: z-fade-rise var(--dur-enter) var(--ease) both;
+  animation-delay: var(--z-delay, 0ms);
+}
+
+.z-slide-enter {
+  animation: z-slide-left var(--dur-enter) var(--ease) both;
+  animation-delay: var(--z-delay, 0ms);
+}
+
+/* Entrada unica da logomarca nas telas de marca. */
+.z-logo-enter {
+  animation: z-logo-in 420ms var(--ease) both;
+}
+
+/* Entrada da sala: a tela "abre" (escala + fade), so na montagem. */
+@keyframes z-room-open {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.z-room-enter {
+  animation: z-room-open 300ms var(--ease) both;
+  transform-origin: center;
 }

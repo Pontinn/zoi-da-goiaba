@@ -1,6 +1,6 @@
 // Tela 3 do UISPEC: criar sala (codigo aleatorio ou personalizado, limite 2 a 8
 // com padrao 6, copiar codigo e aviso de banda do RNF-06).
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { ROOM_CODE_MAX_LENGTH, ROOM_DEFAULT_LIMIT, ROOM_MAX_LIMIT, ROOM_MIN_LIMIT } from '@shared/config'
 import { generateRoomCode, normalize, validateRoomCode } from '../../core/room-code'
 import { RoomCodeUnavailableError } from '../../services/peer-manager'
@@ -9,7 +9,9 @@ import { useAppStore } from '../../store/app-store'
 import { Button, IconButton } from '../components/Button'
 import { TextInput } from '../components/TextInput'
 import { AlertIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DiceIcon } from '../components/icons'
+import { closeDoors, openDoors } from '../components/DoorsTransition'
 import { copyText } from '../clipboard'
+import { rememberLastRoom } from '../last-room'
 import { ROOM_CODE_MESSAGES } from '../validation'
 
 type CodeMode = 'random' | 'custom'
@@ -52,10 +54,15 @@ export function CreateRoomScreen(): JSX.Element {
     }
     setCreating(true)
     setError(null)
+    // As portas fecham e so abrem quando a sala existe de verdade (ou falha).
+    await closeDoors()
     try {
       await session.createRoom({ code: validation.code, limit })
+      rememberLastRoom(validation.code)
       setRoute('room')
+      void openDoors()
     } catch (error) {
+      void openDoors({ failed: true })
       if (error instanceof RoomCodeUnavailableError) {
         setError(error.message)
       } else {
@@ -71,7 +78,7 @@ export function CreateRoomScreen(): JSX.Element {
 
   return (
     <div className="z-shell">
-      <div className="z-shell__topbar">
+      <div className="z-shell__topbar z-fade-enter">
         <div className="z-back">
           <IconButton label="Voltar" onClick={() => setRoute('home')}>
             <ArrowLeftIcon />
@@ -82,14 +89,14 @@ export function CreateRoomScreen(): JSX.Element {
 
       <div className="z-shell__center z-screen-enter">
         <div className="z-panel">
-          <div className="z-panel__head">
+          <div className="z-panel__head z-item-enter">
             <h2 className="z-panel__title">Criar sala</h2>
             <p className="z-panel__lead">
               Compartilhe o codigo com a galera: quem tiver o codigo entra na sala.
             </p>
           </div>
 
-          <div className="z-panel__card">
+          <div className="z-panel__card z-item-enter" style={{ '--z-delay': '70ms' } as CSSProperties}>
             <div className="z-row-between">
               <span className="z-field__label">Codigo da sala</span>
               <div className="z-seg" role="tablist" aria-label="Tipo de codigo">

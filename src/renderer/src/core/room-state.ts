@@ -534,7 +534,10 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
       const payload = message.payload
       // RF-18: TX_START novo do mesmo peer substitui o anterior.
       const previous = transmissionsOf(state, from).map((transmission) => transmission.txId)
-      const transmissions = withoutKeys(state.transmissions, previous)
+      // A copia e obrigatoria: `withoutKeys` devolve o MESMO objeto quando nao ha
+      // o que remover, e escrever nele mutaria o estado anterior (a UI compara
+      // por identidade para decidir o re-render).
+      const transmissions = { ...withoutKeys(state.transmissions, previous) }
       transmissions[payload.txId] = {
         txId: payload.txId,
         peerId: from,
@@ -1313,7 +1316,8 @@ function applyLocalTxStart(state: RoomState, event: LocalTxStartEvent): ReducerR
   const previous = transmissionsOf(state, state.selfPeerId).map(
     (transmission) => transmission.txId
   )
-  const transmissions = withoutKeys(state.transmissions, previous)
+  // Copia obrigatoria pelo mesmo motivo do TX_START remoto (imutabilidade).
+  const transmissions = { ...withoutKeys(state.transmissions, previous) }
   transmissions[event.txId] = {
     txId: event.txId,
     peerId: state.selfPeerId,

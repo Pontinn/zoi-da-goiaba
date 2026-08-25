@@ -453,6 +453,168 @@
   color: var(--success);
 }
 
+/* --- Portas da sala ------------------------------------------------------ */
+
+.z-doors {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  overflow: hidden;
+}
+
+.z-doors__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 50.5%;
+  background: var(--accent-pressed);
+  will-change: transform;
+}
+
+.z-doors__panel--top {
+  top: 0;
+}
+
+.z-doors__panel--bottom {
+  bottom: 0;
+}
+
+@keyframes z-door-close-top {
+  from {
+    transform: translateY(-100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes z-door-close-bottom {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes z-door-open-left {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes z-door-open-right {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.z-doors--closing .z-doors__panel--top {
+  animation: z-door-close-top 280ms var(--ease) both;
+}
+
+.z-doors--closing .z-doors__panel--bottom {
+  animation: z-door-close-bottom 280ms var(--ease) both;
+}
+
+.z-doors--opening .z-doors__panel--top {
+  animation: z-door-open-left 340ms var(--ease) both;
+}
+
+.z-doors--opening .z-doors__panel--bottom {
+  animation: z-door-open-right 340ms var(--ease) both;
+}
+
+.z-doors__center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  color: #ffffff;
+}
+
+.z-doors--closing .z-doors__center {
+  animation: z-fade-in var(--dur-enter) var(--ease) 160ms both;
+}
+
+.z-doors--opening .z-doors__center {
+  animation: z-fade-in 140ms var(--ease) reverse both;
+}
+
+/* Pulso da marca enquanto a porta esta fechada: nao ha video atras. */
+@keyframes z-door-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.86;
+  }
+
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+
+.z-doors__logo {
+  height: 32vh;
+  max-height: 340px;
+  width: auto;
+  width: auto;
+  animation: z-door-pulse 1200ms var(--ease) infinite;
+}
+
+.z-doors__label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+@keyframes z-dot-blink {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+
+  30% {
+    opacity: 1;
+  }
+}
+
+.z-doors__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ffffff;
+  align-self: flex-end;
+  margin-bottom: 6px;
+  animation: z-dot-blink 1200ms linear infinite;
+}
+
+.z-doors__dot:nth-child(2) {
+  animation-delay: 160ms;
+}
+
+.z-doors__dot:nth-child(3) {
+  animation-delay: 320ms;
+}
+
 /* --- Spinner ------------------------------------------------------------- */
 
 .z-spinner {

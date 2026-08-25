@@ -4,10 +4,12 @@ import { useEffect } from 'react'
 import './ui/theme.css'
 import './ui/components/components.css'
 import './ui/screens/screens.css'
+import './ui/screens/room.css'
 import { preloadSounds } from './services/sound-player'
 import { session } from './services/session'
 import { useAppStore } from './store/app-store'
 import { attachRoomStore, useRoomStore } from './store/room-store'
+import { DoorsTransition } from './ui/components/DoorsTransition'
 import { ToastContainer } from './ui/components/Toast'
 import { CreateRoomScreen } from './ui/screens/CreateRoomScreen'
 import { EndedScreen } from './ui/screens/EndedScreen'
@@ -94,6 +96,7 @@ export default function App(): JSX.Element {
       {route === 'room' ? <RoomScreen /> : null}
       {route === 'ended' ? <EndedScreen /> : null}
       <ToastContainer />
+      <DoorsTransition />
     </div>
   )
 }

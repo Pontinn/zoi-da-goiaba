@@ -1,5 +1,5 @@
 // Tela 1 do UISPEC: primeira abertura (marca 28px + apelido + botao "Bora").
-import { useState, type FormEvent } from 'react'
+import { useState, type CSSProperties, type FormEvent } from 'react'
 import { NICKNAME_MAX_LENGTH } from '@shared/ipc'
 import { session } from '../../services/session'
 import { useAppStore } from '../../store/app-store'
@@ -43,10 +43,10 @@ export function FirstRunScreen(): JSX.Element {
       <div className="z-shell__center z-screen-enter">
         <div className="z-panel z-firstrun">
           <Brand size="lg" />
-          <p className="z-firstrun__lead">
+          <p className="z-firstrun__lead z-item-enter" style={{ '--z-delay': '120ms' } as CSSProperties}>
             Compartilhe sua tela com a galera, sem servidor no meio do caminho.
           </p>
-          <form className="z-firstrun__form" onSubmit={(event) => void submit(event)}>
+          <form className="z-firstrun__form z-item-enter" style={{ '--z-delay': '200ms' } as CSSProperties} onSubmit={(event) => void submit(event)}>
             <TextInput
               label="Como te chamam?"
               placeholder="Seu apelido"

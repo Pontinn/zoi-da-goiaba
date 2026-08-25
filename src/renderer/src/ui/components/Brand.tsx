@@ -10,7 +10,12 @@ export interface BrandProps {
 export function Brand({ size = 'lg', withName = true }: BrandProps): JSX.Element {
   return (
     <div className={`z-brand z-brand--${size}`}>
-      <img className="z-brand__mark" src={logoGoiaba} alt="Zói da Goiaba" draggable={false} />
+      <img
+        className="z-brand__mark z-logo-enter"
+        src={logoGoiaba}
+        alt="Zói da Goiaba"
+        draggable={false}
+      />
       {withName ? <h1 className="z-brand__name">Zói da Goiaba</h1> : null}
     </div>
   )

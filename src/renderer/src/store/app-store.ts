@@ -18,8 +18,21 @@ export const TOAST_TTL_MS = 4_000
 
 let toastSeq = 0
 
+/**
+ * Portas da sala: fecham na VERTICAL ao pedir entrada, ficam fechadas durante a
+ * admissao real (com a marca pulsando) e abrem na HORIZONTAL quando a sala entra
+ * em cena, tanto no sucesso quanto no erro.
+ */
+export type DoorPhase = 'idle' | 'closing' | 'closed' | 'opening'
+
+export const DOOR_CLOSE_MS = 280
+export const DOOR_OPEN_MS = 340
+
 export interface AppStore {
   route: Route
+  doorPhase: DoorPhase
+  /** Codigo pre-preenchido ao abrir a tela de entrar (atalho da home). */
+  prefillCode: string | null
   /** Erro fatal do bootstrap (IPC indisponivel): a UI nunca fica em branco. */
   bootError: string | null
   nickname: string
@@ -30,6 +43,8 @@ export interface AppStore {
   updateDismissed: boolean
 
   setRoute: (route: Route) => void
+  setDoorPhase: (phase: DoorPhase) => void
+  setPrefillCode: (code: string | null) => void
   setBootError: (message: string | null) => void
   setIdentity: (identity: { nickname: string; installId: string }) => void
   setNickname: (nickname: string) => void
@@ -42,6 +57,8 @@ export interface AppStore {
 
 export const useAppStore = create<AppStore>((set) => ({
   route: 'boot',
+  doorPhase: 'idle',
+  prefillCode: null,
   bootError: null,
   nickname: '',
   installId: '',
@@ -51,6 +68,8 @@ export const useAppStore = create<AppStore>((set) => ({
   updateDismissed: false,
 
   setRoute: (route) => set({ route }),
+  setDoorPhase: (doorPhase) => set({ doorPhase }),
+  setPrefillCode: (prefillCode) => set({ prefillCode }),
   setBootError: (bootError) => set({ bootError }),
   setIdentity: ({ nickname, installId }) => set({ nickname, installId }),
   setNickname: (nickname) => set({ nickname }),
