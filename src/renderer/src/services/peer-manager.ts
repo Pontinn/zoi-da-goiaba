@@ -33,6 +33,11 @@ export interface CallMetadata {
   pull?: boolean
 }
 
+/** Metadata da conexao de admissao; viaja na OFERTA, pela sinalizacao. */
+export interface DoorConnectionMetadata {
+  memberPeerId: string
+}
+
 export type PeerErrorType = PeerError<string>['type']
 
 /**
@@ -244,10 +249,28 @@ export class PeerManager {
     return peer.connect(peerId, { reliable: true, serialization: 'json' })
   }
 
-  /** Abre a DataConnection efemera de ingresso com o door da sala. */
+  /**
+   * Abre a DataConnection efemera de ingresso com o door da sala. O metadata
+   * viaja na OFERTA (pela sinalizacao), entao chega ao dono mesmo quando o ICE
+   * nunca completa: e o que permite o dial-back da admissao.
+   */
   connectToDoor(code: string): DataConnection {
     const peer = this.requireMemberPeer()
-    return peer.connect(toPeerId(code), { reliable: true, serialization: 'json' })
+    const metadata: DoorConnectionMetadata = { memberPeerId: peer.id }
+    return peer.connect(toPeerId(code), { reliable: true, serialization: 'json', metadata })
+  }
+
+  /**
+   * Fallback de direcao na admissao: o DONO disca de volta a partir do door peer.
+   * Do lado do candidato a conexao chega com `peer` igual ao doorId da sala, o
+   * que mantem a validacao 5c identica a do canal normal.
+   */
+  connectFromDoor(memberPeerId: string): DataConnection {
+    const peer = this.doorPeer
+    if (!peer || peer.destroyed || !peer.open) {
+      throw new Error('a porta nao esta registrada na sinalizacao')
+    }
+    return peer.connect(memberPeerId, { reliable: true, serialization: 'json' })
   }
 
   /** Chamada de midia para um membro, com o txId no metadata (correlacao RF-24). */

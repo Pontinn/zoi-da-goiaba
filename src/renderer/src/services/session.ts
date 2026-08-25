@@ -4,6 +4,7 @@
 import type { DataConnection, MediaConnection } from 'peerjs'
 import {
   ADMISSION_IDLE_TIMEOUT_MS,
+  DOOR_DIALBACK_AFTER_MS,
   JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS,
   JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS,
   JOIN_RESPONSE_TIMEOUT_MS,
@@ -143,6 +144,22 @@ export interface CreateRoomOptions {
 type StateListener = (state: RoomState) => void
 type ToastListener = (toast: Toast) => void
 
+/** Um canal de admissao em disputa do lado de quem ENTRA. */
+interface JoinChannel {
+  connection: DataConnection
+  disposeIce: () => void
+  dead: boolean
+}
+
+/**
+ * Ingresso em andamento. Serve para reconhecer o dial-back: uma DataConnection
+ * que chega do doorId desta tentativa e canal de admissao, nao de mesh.
+ */
+interface PendingJoin {
+  doorId: string
+  adopt(connection: DataConnection): void
+}
+
 /**
  * Retomada do sistema depois de suspensao (powerMonitor no main). Ao dormir, o
  * websocket morre sem que o evento chegue ao renderer: acordar precisa disparar
@@ -184,6 +201,12 @@ export class Session {
   private offResume: (() => void) | null = null
 
   private toastSeq = 0
+  /** Ingresso em andamento (rota o dial-back do dono para a admissao). */
+  private pendingJoin: PendingJoin | null = null
+  /** Prazos de dial-back armados, um por canal de admissao recebido. */
+  private readonly doorDialbackTimers = new Set<ReturnType<typeof setTimeout>>()
+  /** Candidatos com dial-back em curso: no maximo um por vez para cada um. */
+  private readonly doorDialbacks = new Set<string>()
   /** Registro do door em andamento (evita dois takeovers concorrentes). */
   private doorRegistration: Promise<void> | null = null
   private rebroadcastTimer: ReturnType<typeof setInterval> | null = null
@@ -473,9 +496,11 @@ export class Session {
       let opened = false
       /** O servidor confirmou que o id da sala NAO existe (door desregistrado). */
       let doorMissing = false
+      /** Primeiro canal que abriu (normal ou reverso): os outros sao descartados. */
+      let winner: DataConnection | null = null
       const doorId = toPeerId(code)
-      const connection = this.peerManager.connectToDoor(code)
-      const disposeIce = observePeerJsIce(connection, `join-out:${doorId}`)
+      /** Canais de admissao em disputa: o normal e, se houver, o do dial-back. */
+      const channels: JoinChannel[] = []
 
       // Duas falhas MUITO diferentes que antes viravam a mesma frase: a porta
       // nao existe (codigo errado, dono saiu, registro perdido) ou a porta
@@ -483,8 +508,10 @@ export class Session {
       const giveUp = (): Error => {
         if (opened) return new JoinTimeoutError()
         if (doorMissing) return new RoomNotFoundError()
+        const primary = channels[0]
+        const state = primary ? describeConnectionState(primary.connection) : 'sem canal'
         console.warn(
-          `[ice join-out:${doorId}] a porta nao respondeu ${JOIN_RESPONSE_TIMEOUT_MS}ms sem 'peer-unavailable': o id existe na sinalizacao e a conexao e que nao completou (${describeConnectionState(connection)})`
+          `[ice join-out:${doorId}] a porta nao respondeu ${JOIN_RESPONSE_TIMEOUT_MS}ms sem 'peer-unavailable': o id existe na sinalizacao e a conexao e que nao completou (${state})`
         )
         return new RoomUnreachableError()
       }
@@ -493,11 +520,102 @@ export class Session {
         if (settled) return
         settled = true
         clearTimeout(timeout)
-        disposeIce()
         this.memberErrorListeners.delete(onMemberError)
-        connection.close()
+        if (this.pendingJoin === pending) this.pendingJoin = null
+        for (const channel of channels.splice(0)) {
+          channel.disposeIce()
+          channel.connection.close()
+        }
         action()
       }
+
+      /** Liga um canal de admissao (o normal ou o reverso) a esta tentativa. */
+      const wire = (connection: DataConnection, tag: string): void => {
+        const channel: JoinChannel = {
+          connection,
+          disposeIce: observePeerJsIce(connection, tag),
+          dead: false
+        }
+        channels.push(channel)
+
+        const die = (): void => {
+          if (channel.dead) return
+          channel.dead = true
+          // Canal perdedor caindo nao pode derrubar o ingresso em curso.
+          if (winner !== null && winner !== connection) return
+          if (winner === null && channels.some((current) => !current.dead)) return
+          // Canal que nunca abriu: `giveUp` decide entre "nao existe" e "existe
+          // mas nao conectou". Fechou depois de aberto = o dono nao respondeu.
+          finish(() => reject(giveUp()))
+        }
+
+        connection.on('open', () => {
+          opened = true
+          if (winner === null) {
+            winner = connection
+            // O primeiro que abre vence; o outro nao serve mais para nada.
+            for (const current of channels) {
+              if (current.connection === connection || current.dead) continue
+              current.dead = true
+              current.disposeIce()
+              current.connection.close()
+            }
+          } else if (winner !== connection) {
+            connection.close()
+            return
+          }
+          connection.send(
+            createEnvelope(
+              'JOIN_REQUEST',
+              {
+                nickname: this.nickname,
+                memberPeerId: this.peerManager.memberPeerId,
+                installId: this.installId
+              },
+              this.peerManager.memberPeerId,
+              Date.now()
+            )
+          )
+        })
+
+        connection.on('data', (raw: unknown) => {
+          // O candidato so aceita respostas do door ao qual ELE se conectou (5c).
+          // No canal reverso o `peer` da conexao TAMBEM e o door, entao a regra
+          // continua exatamente a mesma.
+          const result = validateEnvelope(raw, connection.peer)
+          if (!result.ok) return
+          if (result.message.type === 'JOIN_ACCEPT') {
+            const accept = result.message.payload
+            finish(() => resolve(accept))
+            return
+          }
+          if (result.message.type === 'JOIN_REJECT') {
+            const reason = result.message.payload.reason
+            finish(() => reject(new JoinRejectedError(reason)))
+          }
+        })
+
+        connection.on('close', die)
+        connection.on('error', die)
+      }
+
+      /**
+       * Canal reverso do dial-back: o dono discou de volta a partir do door peer
+       * porque o canal aberto por nos nao subiu.
+       */
+      const pending: PendingJoin = {
+        doorId,
+        adopt: (reverse: DataConnection) => {
+          if (settled) {
+            reverse.close()
+            return
+          }
+          const tag = `join-dialback-in:${shortPeerId(doorId)}`
+          console.info(`[ice ${tag}] o dono discou de volta pela porta da sala`)
+          wire(reverse, tag)
+        }
+      }
+      this.pendingJoin = pending
 
       // Mesma leitura do `close`: canal que nunca abriu significa que nao existe
       // door com esse codigo. Sem isso, um `peer-unavailable` que demora mais que
@@ -516,57 +634,85 @@ export class Session {
       }
       this.memberErrorListeners.add(onMemberError)
 
-      connection.on('open', () => {
-        opened = true
-        connection.send(
-          createEnvelope(
-            'JOIN_REQUEST',
-            {
-              nickname: this.nickname,
-              memberPeerId: this.peerManager.memberPeerId,
-              installId: this.installId
-            },
-            this.peerManager.memberPeerId,
-            Date.now()
-          )
-        )
-      })
-
-      connection.on('data', (raw: unknown) => {
-        // O candidato so aceita respostas do door ao qual ELE se conectou (5c).
-        const result = validateEnvelope(raw, connection.peer)
-        if (!result.ok) return
-        if (result.message.type === 'JOIN_ACCEPT') {
-          const accept = result.message.payload
-          finish(() => resolve(accept))
-          return
-        }
-        if (result.message.type === 'JOIN_REJECT') {
-          const reason = result.message.payload.reason
-          finish(() => reject(new JoinRejectedError(reason)))
-        }
-      })
-
-      connection.on('close', () => {
-        // Canal que nunca abriu: `giveUp` decide entre "nao existe" e "existe
-        // mas nao conectou". Fechou depois de aberto = o dono nao respondeu.
-        finish(() => reject(giveUp()))
-      })
-
-      connection.on('error', () => {
-        finish(() => reject(giveUp()))
-      })
+      wire(this.peerManager.connectToDoor(code), `join-out:${doorId}`)
     })
   }
 
   /** Lado do DONO: canal efemero de admissao, so aceita JOIN_REQUEST (5c). */
   private handleDoorConnection(connection: DataConnection): void {
     const tag = `door-in:${shortPeerId(connection.peer)}`
-    const disposeIce = observePeerJsIce(connection, tag)
     // A oferta de admissao chega pela SINALIZACAO: este log sai mesmo quando o
     // ICE nunca fecha, e e ele que separa "ninguem tentou entrar" de "tentou e
     // a conexao direta nao subiu".
     console.info(`[ice ${tag}] pedido de admissao chegou pela sinalizacao`)
+    const cancelDialback = this.scheduleDoorDialback(connection)
+    this.serveAdmission(connection, tag, {
+      onOpen: cancelDialback,
+      onDone: cancelDialback
+    })
+  }
+
+  /**
+   * Fallback de direcao da admissao. O canal e sempre aberto por quem ENTRA, e
+   * sem TURN (RF-42) essa direcao pode simplesmente nunca fechar o ICE. Se ela
+   * nao abrir em DOOR_DIALBACK_AFTER_MS, o dono disca de volta a partir do door
+   * peer: uma unica vez por tentativa, para nao virar tempestade com os retries.
+   */
+  private scheduleDoorDialback(incoming: DataConnection): () => void {
+    const metadata = incoming.metadata as { memberPeerId?: unknown } | null | undefined
+    const memberPeerId = typeof metadata?.memberPeerId === 'string' ? metadata.memberPeerId : ''
+    // Candidato antigo (sem metadata) ou metadata que nao bate com o peer REAL
+    // da oferta: segue so o caminho normal, como antes.
+    if (memberPeerId === '' || memberPeerId !== incoming.peer) return () => {}
+
+    const timer = setTimeout(() => {
+      this.doorDialbackTimers.delete(timer)
+      if (incoming.open) return
+      this.startDoorDialback(memberPeerId)
+    }, DOOR_DIALBACK_AFTER_MS)
+    this.doorDialbackTimers.add(timer)
+
+    return () => {
+      if (!this.doorDialbackTimers.delete(timer)) return
+      clearTimeout(timer)
+    }
+  }
+
+  private startDoorDialback(memberPeerId: string): void {
+    if (!isOwner(this.state) || this.state.phase !== 'active') return
+    if (this.doorDialbacks.has(memberPeerId)) return
+    const tag = `door-dialback-out:${shortPeerId(memberPeerId)}`
+
+    let reverse: DataConnection
+    try {
+      reverse = this.peerManager.connectFromDoor(memberPeerId)
+    } catch (error) {
+      console.warn(`[ice ${tag}] nao foi possivel discar de volta:`, error)
+      return
+    }
+
+    this.doorDialbacks.add(memberPeerId)
+    console.info(
+      `[ice ${tag}] o canal de admissao nao abriu em ${DOOR_DIALBACK_AFTER_MS}ms; discando de volta pela porta`
+    )
+    this.serveAdmission(reverse, tag, {
+      onDone: () => this.doorDialbacks.delete(memberPeerId)
+    })
+  }
+
+  /** Maquinaria de admissao de UM canal (o normal ou o do dial-back). */
+  private serveAdmission(
+    connection: DataConnection,
+    tag: string,
+    hooks: { onOpen?: () => void; onDone?: () => void }
+  ): void {
+    const disposeIce = observePeerJsIce(connection, tag)
+    let done = false
+    const markDone = (): void => {
+      if (done) return
+      done = true
+      hooks.onDone?.()
+    }
 
     const idleTimer = setTimeout(() => {
       if (connection.open) {
@@ -578,6 +724,7 @@ export class Session {
       }
       disposeIce()
       connection.close()
+      markDone()
     }, ADMISSION_IDLE_TIMEOUT_MS)
 
     const closeSoon = (): void => {
@@ -588,6 +735,7 @@ export class Session {
 
     connection.on('open', () => {
       console.info(`[ice ${tag}] canal de admissao aberto`)
+      hooks.onOpen?.()
     })
 
     connection.on('data', (raw: unknown) => {
@@ -643,16 +791,25 @@ export class Session {
     connection.on('close', () => {
       clearTimeout(idleTimer)
       disposeIce()
+      markDone()
     })
     connection.on('error', () => {
       clearTimeout(idleTimer)
       disposeIce()
+      markDone()
     })
   }
 
   // --- mesh ----------------------------------------------------------------
 
   private handleIncomingMeshConnection(connection: DataConnection): void {
+    const pending = this.pendingJoin
+    // Dial-back da admissao: a conexao vem do DOOR da sala em que estamos
+    // tentando entrar, entao e canal de ingresso, nunca mesh.
+    if (pending && connection.peer === pending.doorId) {
+      pending.adopt(connection)
+      return
+    }
     this.mesh.attach(connection, 'incoming')
   }
 
@@ -927,6 +1084,10 @@ export class Session {
 
   teardown(): void {
     this.stopOwnerRebroadcast()
+    this.pendingJoin = null
+    for (const timer of this.doorDialbackTimers) clearTimeout(timer)
+    this.doorDialbackTimers.clear()
+    this.doorDialbacks.clear()
     if (this.offResume !== null) {
       this.offResume()
       this.offResume = null

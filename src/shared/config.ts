@@ -72,6 +72,14 @@ export const JOIN_TIMEOUT_RETRIES = 1
 /** Candidato que abre o canal de admissao e nao envia JOIN_REQUEST. */
 export const ADMISSION_IDLE_TIMEOUT_MS = 10_000
 
+/**
+ * Fallback de direcao na admissao: se o canal aberto PELO candidato nao subir
+ * neste prazo, o dono disca de volta a partir do door peer. Precisa ser bem
+ * menor que JOIN_RESPONSE_TIMEOUT_MS para o canal reverso ainda dar tempo de
+ * completar o ingresso da tentativa em andamento.
+ */
+export const DOOR_DIALBACK_AFTER_MS = 4_000
+
 /** Broadcast de qualidade (RF-38) e tempo ate a exibicao virar "sem dados". */
 export const QUALITY_UPDATE_INTERVAL_MS = 3_000
 export const QUALITY_STALE_MS = 10_000
