@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, shell, BrowserWindow } from 'electron'
 import { registerDisplayMediaHandler } from './capture'
@@ -6,6 +7,20 @@ import { registerUpdaterIpc, startUpdater } from './updater'
 
 // Token --bg-app do UISPEC: pintar a janela antes do primeiro frame evita flash branco.
 const APP_BACKGROUND = '#0e0b12'
+
+/**
+ * Icone da janela (barra de titulo e barra de tarefas) em DESENVOLVIMENTO.
+ * No app empacotado o icone ja vem embutido no proprio `ZoiDaGoiaba.exe` pelo
+ * electron-builder (`win.icon` no electron-builder.yml), e `build/` nao entra no
+ * asar: por isso o caminho e resolvido a partir da raiz do projeto e so e usado
+ * quando o arquivo existe de fato. `.ico` (multi-resolucao) rende mais nitido
+ * que PNG na barra de tarefas do Windows.
+ */
+function resolveWindowIcon(): string | undefined {
+  if (app.isPackaged) return undefined
+  const iconPath = join(app.getAppPath(), 'build', 'icon.ico')
+  return existsSync(iconPath) ? iconPath : undefined
+}
 
 let mainWindow: BrowserWindow | null = null
 
@@ -25,6 +40,7 @@ function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     backgroundColor: APP_BACKGROUND,
     title: 'Zói da Goiaba',
+    icon: resolveWindowIcon(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
