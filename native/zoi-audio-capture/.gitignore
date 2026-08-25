@@ -1,2 +1,4 @@
-# Saida do node-gyp: binario recompilado a cada install, nunca versionado.
 build/
+
+# Cache do @electron/rebuild por ABI: saida gerada, nunca versionada.
+bin/
