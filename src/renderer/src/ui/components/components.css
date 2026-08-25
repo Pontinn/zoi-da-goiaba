@@ -296,9 +296,11 @@
   padding: var(--space-6);
 }
 
-/* --- Toast --------------------------------------------------------------- */
+/* --- Avisos (toasts + update) -------------------------------------------- */
 
-.z-toasts {
+/* Pilha unica no canto inferior direito: o aviso de atualizacao fica por cima
+   dos toasts, e ninguem se sobrepoe a ninguem. */
+.z-notices {
   position: fixed;
   right: var(--space-6);
   bottom: var(--space-6);
@@ -308,6 +310,18 @@
   align-items: flex-end;
   gap: var(--space-2);
   pointer-events: none;
+}
+
+.z-toasts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.z-toasts:empty {
+  display: none;
 }
 
 .z-toast {
@@ -372,6 +386,86 @@
 
 .z-toast__text {
   color: var(--text-primary);
+}
+
+/* --- Aviso de atualizacao (F4) ------------------------------------------- */
+
+.z-update {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 340px;
+  max-width: 340px;
+  padding: var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-elevated);
+  pointer-events: auto;
+  animation: z-fade-rise var(--dur-enter) var(--ease) both;
+}
+
+.z-update__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.z-update__icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+.z-update__copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.z-update__title {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.z-update__text {
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+}
+
+.z-update__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.z-update__progress {
+  overflow: hidden;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+}
+
+/* Progresso em scaleX: nada de animar largura (UISPEC secao 2). */
+.z-update__bar {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform var(--dur-fast) linear;
+  will-change: transform;
 }
 
 /* --- Marca --------------------------------------------------------------- */

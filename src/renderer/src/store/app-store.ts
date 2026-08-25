@@ -2,7 +2,7 @@
 // granulares: cada tela assina so o pedaco que usa, para nao re-renderizar a
 // arvore da sala (pilar de performance, RNF-12).
 import { create } from 'zustand'
-import type { UpdateStatus } from '@shared/ipc'
+import type { UpdateState, UpdateStatus } from '@shared/ipc'
 import type { ToastTone } from '../core/room-state'
 
 export type Route = 'boot' | 'first-run' | 'home' | 'create' | 'join' | 'room' | 'ended'
@@ -41,6 +41,14 @@ export interface AppStore {
   toasts: ToastItem[]
   updateStatus: UpdateStatus | null
   updateDismissed: boolean
+  /** Uma checagem manual (botao das Configuracoes) esta aguardando resposta. */
+  updateCheckPending: boolean
+  /**
+   * Estado do PRIMEIRO evento que respondeu a uma checagem manual, ainda nao
+   * exibido. So a checagem manual merece resposta quando nao ha novidade; a
+   * checagem automatica do boot fica silenciosa (risco R9 da SPEC).
+   */
+  updateCheckResult: UpdateState | null
 
   setRoute: (route: Route) => void
   setDoorPhase: (phase: DoorPhase) => void
@@ -53,6 +61,8 @@ export interface AppStore {
   dismissToast: (id: number) => void
   setUpdateStatus: (status: UpdateStatus) => void
   dismissUpdate: () => void
+  requestUpdateCheck: () => void
+  consumeUpdateCheckResult: () => void
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -66,6 +76,8 @@ export const useAppStore = create<AppStore>((set) => ({
   toasts: [],
   updateStatus: null,
   updateDismissed: false,
+  updateCheckPending: false,
+  updateCheckResult: null,
 
   setRoute: (route) => set({ route }),
   setDoorPhase: (doorPhase) => set({ doorPhase }),
@@ -83,6 +95,22 @@ export const useAppStore = create<AppStore>((set) => ({
     }),
   dismissToast: (id) =>
     set((current) => ({ toasts: current.toasts.filter((toast) => toast.id !== id) })),
-  setUpdateStatus: (updateStatus) => set({ updateStatus, updateDismissed: false }),
-  dismissUpdate: () => set({ updateDismissed: true })
+  setUpdateStatus: (updateStatus) =>
+    set((current) => {
+      // `checking` e so o eco do pedido: quem responde a checagem manual e o
+      // evento seguinte (available / downloaded / none / error).
+      const answersCheck = current.updateCheckPending && updateStatus.state !== 'checking'
+      return {
+        updateStatus,
+        // O "dispensei" so cai quando o updater MUDA de estado. Sem isso, cada
+        // tick de progresso (varios por segundo) traria o aviso de volta.
+        updateDismissed:
+          current.updateStatus?.state === updateStatus.state ? current.updateDismissed : false,
+        updateCheckPending: answersCheck ? false : current.updateCheckPending,
+        updateCheckResult: answersCheck ? updateStatus.state : current.updateCheckResult
+      }
+    }),
+  dismissUpdate: () => set({ updateDismissed: true }),
+  requestUpdateCheck: () => set({ updateCheckPending: true, updateCheckResult: null }),
+  consumeUpdateCheckResult: () => set({ updateCheckResult: null })
 }))

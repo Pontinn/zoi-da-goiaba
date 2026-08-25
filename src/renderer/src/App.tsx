@@ -12,6 +12,7 @@ import { useAppStore } from './store/app-store'
 import { attachRoomStore, useRoomStore } from './store/room-store'
 import { DoorsTransition } from './ui/components/DoorsTransition'
 import { ToastContainer } from './ui/components/Toast'
+import { UpdateNotice } from './ui/components/UpdateNotice'
 import { CreateRoomScreen } from './ui/screens/CreateRoomScreen'
 import { EndedScreen } from './ui/screens/EndedScreen'
 import { FirstRunScreen } from './ui/screens/FirstRunScreen'
@@ -96,7 +97,10 @@ export default function App(): JSX.Element {
       {route === 'join' ? <JoinRoomScreen /> : null}
       {route === 'room' ? <RoomScreen /> : null}
       {route === 'ended' ? <EndedScreen /> : null}
-      <ToastContainer />
+      <div className="z-notices">
+        <UpdateNotice />
+        <ToastContainer />
+      </div>
       <DoorsTransition />
     </div>
   )

@@ -24,6 +24,7 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
   const setNickname = useAppStore((state) => state.setNickname)
   const pushToast = useAppStore((state) => state.pushToast)
   const updateStatus = useAppStore((state) => state.updateStatus)
+  const requestUpdateCheck = useAppStore((state) => state.requestUpdateCheck)
 
   const [draft, setDraft] = useState(nickname)
   const [error, setError] = useState<string | null>(null)
@@ -54,9 +55,14 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
 
   const checkUpdates = async (): Promise<void> => {
     setChecking(true)
+    // Marca a checagem como MANUAL: o `UpdateNotice` responde com toast mesmo
+    // quando nao ha novidade (a checagem automatica do boot fica silenciosa).
+    requestUpdateCheck()
+    // O aviso de "procurando" vem ANTES do await: a resposta do main costuma
+    // chegar primeiro, e a pilha de toasts ficaria fora de ordem.
+    pushToast('info', 'Procurando atualizacoes...')
     try {
       await window.zoi.update.check()
-      pushToast('info', 'Procurando atualizacoes...')
     } catch {
       pushToast('warning', 'Nao foi possivel verificar atualizacoes agora.')
     } finally {
@@ -107,6 +113,16 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
           {updateStatus?.state === 'downloaded' ? (
             <div className="z-badge z-badge--success" style={{ marginTop: 'var(--space-2)' }}>
               atualizacao pronta
+            </div>
+          ) : null}
+          {updateStatus?.state === 'available' ? (
+            <div className="z-badge z-badge--neutral" style={{ marginTop: 'var(--space-2)' }}>
+              nova versao disponivel
+            </div>
+          ) : null}
+          {updateStatus?.state === 'downloading' ? (
+            <div className="z-badge z-badge--neutral" style={{ marginTop: 'var(--space-2)' }}>
+              {`baixando ${updateStatus.percent ?? 0}%`}
             </div>
           ) : null}
         </div>
