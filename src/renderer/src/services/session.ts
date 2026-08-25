@@ -7,6 +7,7 @@ import {
   JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS,
   JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS,
   JOIN_RESPONSE_TIMEOUT_MS,
+  JOIN_TIMEOUT_RETRIES,
   OWNER_REBROADCAST_COUNT,
   OWNER_REBROADCAST_INTERVAL_MS,
   ROOM_DEFAULT_LIMIT,
@@ -269,6 +270,7 @@ export class Session {
 
     const selfPeerId = await this.start()
     const deadline = Date.now() + JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS
+    let timeoutRetries = JOIN_TIMEOUT_RETRIES
 
     let accept: JoinAcceptPayload | null = null
     for (;;) {
@@ -277,11 +279,19 @@ export class Session {
         break
       } catch (error) {
         // Janela de indisponibilidade do id durante transferencia de posse (R5).
-        const unavailable = error instanceof RoomNotFoundError
-        if (!unavailable || Date.now() >= deadline) throw error
-        await new Promise((resolve) =>
-          setTimeout(resolve, JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS)
-        )
+        if (error instanceof RoomNotFoundError && Date.now() < deadline) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS)
+          )
+          continue
+        }
+        // O door respondeu mas a admissao nao concluiu (dono ocupado ou canal
+        // perdido no meio): uma segunda tentativa antes de desistir.
+        if (error instanceof JoinTimeoutError && timeoutRetries > 0) {
+          timeoutRetries -= 1
+          continue
+        }
+        throw error
       }
     }
 
@@ -382,8 +392,12 @@ export class Session {
         action()
       }
 
+      // Mesma leitura do `close`: canal que nunca abriu significa que nao existe
+      // door com esse codigo. Sem isso, um `peer-unavailable` que demora mais que
+      // a espera interna virava "Sem resposta da sala." no lugar de "Sala nao
+      // encontrada." (e ainda saia do retry, que so cobria RoomNotFoundError).
       const timeout = setTimeout(() => {
-        finish(() => reject(new JoinTimeoutError()))
+        finish(() => reject(opened ? new JoinTimeoutError() : new RoomNotFoundError()))
       }, JOIN_RESPONSE_TIMEOUT_MS)
 
       const onMemberError = (type: string): void => {

@@ -42,6 +42,8 @@ export const DOOR_REGISTER_RETRY_INTERVAL_MS = 800
 export const JOIN_RESPONSE_TIMEOUT_MS = 10_000
 export const JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS = 10_000
 export const JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS = 1_000
+/** Segunda (e ultima) chance quando o door abriu mas o dono nao respondeu. */
+export const JOIN_TIMEOUT_RETRIES = 1
 
 /** Candidato que abre o canal de admissao e nao envia JOIN_REQUEST. */
 export const ADMISSION_IDLE_TIMEOUT_MS = 10_000
