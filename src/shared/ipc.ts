@@ -25,10 +25,14 @@ export interface AppSettings {
   nickname: string | null
   /** UUID v4 estavel por instalacao; chave da ban list (RF-08/RF-33). */
   installId: string
+  /** Volume dos sons do app (0..1). Ausente ou invalido no disco vira o padrao. */
+  soundVolume: number
 }
 
+/** Cada campo presente e aplicado; os ausentes ficam como estao. */
 export interface SettingsSetRequest {
-  nickname: string
+  nickname?: string
+  soundVolume?: number
 }
 
 /** Limites de nickname (assumption A9 da SPEC): 1 a 24 chars apos trim. */

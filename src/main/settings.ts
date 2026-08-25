@@ -1,6 +1,6 @@
-// Persistencia de settings (nickname + installId) em `userData/settings.json`.
-// Escrita atomica (temp + rename); duas chaves nao justificam uma dependencia
-// externa (SPEC secao 3, trade-off 9).
+// Persistencia de settings (nickname + installId + volume dos sons) em
+// `userData/settings.json`. Escrita atomica (temp + rename); um punhado de
+// chaves nao justifica uma dependencia externa (SPEC secao 3, trade-off 9).
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -11,6 +11,7 @@ import {
   type AppSettings,
   type NicknameErrorCode
 } from '@shared/ipc'
+import { clampSoundVolume, DEFAULT_SOUND_VOLUME } from '@shared/sounds'
 
 export class NicknameValidationError extends Error {
   readonly code: NicknameErrorCode
@@ -32,7 +33,9 @@ function settingsPath(): string {
   return join(app.getPath('userData'), 'settings.json')
 }
 
-function isValidPersistedShape(value: unknown): value is { nickname?: unknown; installId?: unknown } {
+function isValidPersistedShape(
+  value: unknown
+): value is { nickname?: unknown; installId?: unknown; soundVolume?: unknown } {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -52,7 +55,8 @@ function readFromDisk(): AppSettings | null {
     const installId = typeof parsed.installId === 'string' ? parsed.installId : null
     const nickname = typeof parsed.nickname === 'string' ? parsed.nickname : null
     if (!installId) throw new Error('installId ausente')
-    return { nickname, installId }
+    // Volume ausente ou torto nao invalida o arquivo: cai no padrao.
+    return { nickname, installId, soundVolume: clampSoundVolume(parsed.soundVolume) }
   } catch (error) {
     // Arquivo corrompido: preserva como .bak e recomeca do zero (SPEC Sprint 2, edge case).
     console.warn('[settings] arquivo corrompido, renomeando para settings.bak:', error)
@@ -82,7 +86,7 @@ export function getSettings(): AppSettings {
     return cache
   }
 
-  cache = { nickname: null, installId: randomUUID() }
+  cache = { nickname: null, installId: randomUUID(), soundVolume: DEFAULT_SOUND_VOLUME }
   writeToDisk(cache)
   return cache
 }
@@ -94,7 +98,16 @@ export function setNickname(rawNickname: unknown): AppSettings {
   if (nickname.length > NICKNAME_MAX_LENGTH) throw new NicknameValidationError('too_long')
 
   const current = getSettings()
-  const next: AppSettings = { nickname, installId: current.installId }
+  const next: AppSettings = { ...current, nickname }
+  writeToDisk(next)
+  cache = next
+  return next
+}
+
+/** Persiste o volume dos sons do app; valor invalido ou fora de 0..1 e ajustado. */
+export function setSoundVolume(rawVolume: unknown): AppSettings {
+  const current = getSettings()
+  const next: AppSettings = { ...current, soundVolume: clampSoundVolume(rawVolume) }
   writeToDisk(next)
   cache = next
   return next

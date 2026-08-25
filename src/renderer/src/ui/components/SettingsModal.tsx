@@ -1,8 +1,9 @@
-// Configuracoes: apelido com round-trip (campo pre-preenchido, RF-13/AC-08) e
-// versao do app com "verificar atualizacoes" (F4).
-import { useState } from 'react'
+// Configuracoes: apelido com round-trip (campo pre-preenchido, RF-13/AC-08),
+// volume dos sons do app e versao do app com "verificar atualizacoes" (F4).
+import { useRef, useState } from 'react'
 import { NICKNAME_MAX_LENGTH } from '@shared/ipc'
 import { session } from '../../services/session'
+import { getSoundVolume, playSound, setSoundVolume } from '../../services/sound-player'
 import { useAppStore } from '../../store/app-store'
 import { Button } from './Button'
 import { Modal } from './Modal'
@@ -31,6 +32,27 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
   const [saving, setSaving] = useState(false)
   const [checking, setChecking] = useState(false)
   const [openingLogs, setOpeningLogs] = useState(false)
+  // O modal so monta aberto: o slider ja nasce no volume que esta valendo.
+  const [soundVolume, setSoundVolumeDraft] = useState(() => getSoundVolume())
+  // So salva e da o feedback sonoro quando o usuario mexeu de fato no slider.
+  const volumeDirty = useRef(false)
+
+  const dragSoundVolume = (value: number): void => {
+    volumeDirty.current = true
+    setSoundVolumeDraft(value)
+    // Aplica na hora: o proximo som ja sai no nivel novo.
+    setSoundVolume(value)
+  }
+
+  // Ao SOLTAR o slider: som curto como amostra do nivel e gravacao do valor.
+  const commitSoundVolume = (): void => {
+    if (!volumeDirty.current) return
+    volumeDirty.current = false
+    playSound('entered')
+    void window.zoi.settings.set({ soundVolume }).catch(() => {
+      pushToast('warning', 'Nao foi possivel salvar o volume dos sons.')
+    })
+  }
 
   const save = async (): Promise<void> => {
     const validation = validateNickname(draft)
@@ -115,6 +137,39 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
       />
 
       <div className="z-row-between" style={{ marginTop: 'var(--space-4)' }}>
+        <div>
+          <div className="z-secondary" style={{ fontSize: 'var(--text-secondary-size)' }}>
+            Volume dos sons do app
+          </div>
+          <div className="z-secondary" style={{ fontSize: 'var(--text-meta)' }}>
+            Avisos de entrar, sair e transmitir. No zero fica mudo.
+          </div>
+        </div>
+        <span className="z-volume">
+          <input
+            className="z-volume__slider"
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={soundVolume}
+            aria-label="Volume dos sons do app"
+            data-testid="settings-sound-volume"
+            onChange={(event) => dragSoundVolume(Number(event.target.value))}
+            onPointerUp={commitSoundVolume}
+            onKeyUp={commitSoundVolume}
+            onBlur={commitSoundVolume}
+          />
+          <span
+            className="z-secondary z-tabular"
+            style={{ fontSize: 'var(--text-meta)', minWidth: '2.5rem', textAlign: 'right' }}
+          >
+            {`${Math.round(soundVolume * 100)}%`}
+          </span>
+        </span>
+      </div>
+
+      <div className="z-row-between" style={{ marginTop: 'var(--space-3)' }}>
         <div>
           <div className="z-secondary" style={{ fontSize: 'var(--text-secondary-size)' }}>
             Versao do app

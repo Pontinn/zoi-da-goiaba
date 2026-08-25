@@ -6,7 +6,7 @@ import './ui/components/components.css'
 import './ui/screens/screens.css'
 import './ui/screens/room.css'
 import './ui/screens/player.css'
-import { preloadSounds } from './services/sound-player'
+import { preloadSounds, setSoundVolume } from './services/sound-player'
 import { session } from './services/session'
 import { useAppStore } from './store/app-store'
 import { attachRoomStore, useRoomStore } from './store/room-store'
@@ -60,6 +60,8 @@ export default function App(): JSX.Element {
           window.zoi.app.getVersion()
         ])
         store.setVersion(version)
+        // Antes de qualquer som tocavel: nenhum evento de sala chega ate aqui.
+        setSoundVolume(settings.soundVolume)
         store.setIdentity({ nickname: settings.nickname ?? '', installId: settings.installId })
         if (!settings.nickname) {
           store.setRoute('first-run')

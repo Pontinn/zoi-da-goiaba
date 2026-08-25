@@ -10,14 +10,18 @@ import {
 } from '@shared/ipc'
 import { listSources, selectSource } from './capture'
 import { ensureLogDirectory } from './file-logger'
-import { getSettings, NicknameValidationError, setNickname } from './settings'
+import { getSettings, NicknameValidationError, setNickname, setSoundVolume } from './settings'
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.settingsGet, (): AppSettings => getSettings())
 
   ipcMain.handle(IPC.settingsSet, (_event, request: SettingsSetRequest): AppSettings => {
     try {
-      return setNickname(request?.nickname)
+      // Pedido parcial: cada campo presente e aplicado na ordem, os outros ficam.
+      let settings = getSettings()
+      if (request?.nickname !== undefined) settings = setNickname(request.nickname)
+      if (request?.soundVolume !== undefined) settings = setSoundVolume(request.soundVolume)
+      return settings
     } catch (error) {
       if (error instanceof NicknameValidationError) {
         // Erro estruturado: o renderer le o codigo pelo prefixo da mensagem.
