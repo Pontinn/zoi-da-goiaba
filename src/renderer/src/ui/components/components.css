@@ -312,6 +312,12 @@
   pointer-events: none;
 }
 
+/* Com o player embutido aberto, a pilha sobe acima da barra de controles: e o
+   mesmo canto onde vivem volume, PiP e tela cheia. */
+.z-notices--player {
+  bottom: calc(var(--space-6) + 68px);
+}
+
 .z-toasts {
   display: flex;
   flex-direction: column;
@@ -336,7 +342,9 @@
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-elevated);
   font-size: var(--text-secondary-size);
-  pointer-events: auto;
+  /* Aviso passageiro e SEM acao: nunca deve roubar um clique de quem esta
+     embaixo (barra do player). Toast com botao deve religar isso no botao. */
+  pointer-events: none;
   animation: z-fade-rise var(--dur-enter) var(--ease) both;
 }
 

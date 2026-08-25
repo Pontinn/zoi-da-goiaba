@@ -42,6 +42,8 @@ export default function App(): JSX.Element {
   const bootError = useAppStore((state) => state.bootError)
   const phase = useRoomStore((state) => state.room.phase)
   const endReason = useRoomStore((state) => state.room.endReason)
+  // Player embutido aberto: os avisos sobem para nao cobrir os controles dele.
+  const playerOpen = useRoomStore((state) => state.selectedTxId !== null)
 
   // Bootstrap: sons, ligacao com a sessao e identidade persistida.
   useEffect(() => {
@@ -97,7 +99,7 @@ export default function App(): JSX.Element {
       {route === 'join' ? <JoinRoomScreen /> : null}
       {route === 'room' ? <RoomScreen /> : null}
       {route === 'ended' ? <EndedScreen /> : null}
-      <div className="z-notices">
+      <div className={playerOpen ? 'z-notices z-notices--player' : 'z-notices'}>
         <UpdateNotice />
         <ToastContainer />
       </div>
