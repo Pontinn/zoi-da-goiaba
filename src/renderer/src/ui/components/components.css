@@ -1,0 +1,471 @@
+/* Componentes base do inventario do UISPEC (secao 3). */
+
+/* --- Botoes -------------------------------------------------------------- */
+
+.z-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-4);
+  height: 38px;
+  font-size: var(--text-body);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.z-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.z-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.z-btn--sm {
+  height: 30px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-secondary-size);
+}
+
+.z-btn--lg {
+  height: 46px;
+  padding: 0 var(--space-6);
+  font-size: var(--text-subtitle);
+}
+
+.z-btn--block {
+  width: 100%;
+}
+
+.z-btn--primary {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.z-btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.z-btn--primary:active:not(:disabled) {
+  background: var(--accent-pressed);
+  transform: translateY(0);
+}
+
+.z-btn--secondary {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.z-btn--secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  transform: translateY(-1px);
+}
+
+.z-btn--secondary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.z-btn--danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.z-btn--danger:hover:not(:disabled) {
+  background: #ff5c78;
+  transform: translateY(-1px);
+}
+
+.z-btn--danger:active:not(:disabled) {
+  background: #e02747;
+  transform: translateY(0);
+}
+
+.z-btn--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.z-btn--ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.z-btn__spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #ffffff59;
+  border-top-color: #ffffff;
+  animation: z-spin 700ms linear infinite;
+}
+
+/* Botao icone (engrenagem, fechar, menu). */
+.z-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.z-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.z-icon-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* --- Input de texto ------------------------------------------------------ */
+
+.z-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.z-field__label {
+  font-size: var(--text-secondary-size);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.z-field__wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.z-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.z-input::placeholder {
+  color: var(--text-muted);
+}
+
+.z-input:hover:not(:disabled) {
+  border-color: #3a2f4c;
+}
+
+.z-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.z-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.z-input--invalid,
+.z-input--invalid:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px #ff3d5e26;
+}
+
+.z-input--mono {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.z-field__footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 16px;
+}
+
+.z-field__hint {
+  font-size: var(--text-meta);
+  color: var(--text-muted);
+}
+
+.z-field__error {
+  font-size: var(--text-meta);
+  color: var(--danger);
+  animation: z-fade-in var(--dur-enter) var(--ease) both;
+}
+
+.z-field__counter {
+  font-size: var(--text-meta);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Modal --------------------------------------------------------------- */
+
+.z-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: #000000a6;
+  animation: z-fade-in var(--dur-screen) var(--ease) both;
+}
+
+.z-modal {
+  width: 100%;
+  max-width: 460px;
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-modal);
+  box-shadow: var(--shadow-elevated);
+  animation: z-pop-in var(--dur-screen) var(--ease) both;
+}
+
+.z-modal--wide {
+  max-width: 860px;
+}
+
+.z-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-6) var(--space-4);
+}
+
+.z-modal__title {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: 600;
+}
+
+.z-modal__subtitle {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+}
+
+.z-modal__body {
+  padding: 0 var(--space-6);
+  overflow-y: auto;
+}
+
+.z-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-6);
+}
+
+/* --- Toast --------------------------------------------------------------- */
+
+.z-toasts {
+  position: fixed;
+  right: var(--space-6);
+  bottom: var(--space-6);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.z-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 380px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-elevated);
+  font-size: var(--text-secondary-size);
+  pointer-events: auto;
+  animation: z-fade-rise var(--dur-enter) var(--ease) both;
+}
+
+.z-toast--leaving {
+  animation: z-fade-in var(--dur-enter) var(--ease) reverse both;
+}
+
+.z-toast--info {
+  border-left-color: var(--accent);
+}
+
+.z-toast--success {
+  border-left-color: var(--success);
+}
+
+.z-toast--warning {
+  border-left-color: var(--warning);
+}
+
+.z-toast--danger {
+  border-left-color: var(--danger);
+}
+
+.z-toast__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.z-toast--info .z-toast__dot {
+  color: var(--accent-hover);
+}
+
+.z-toast--success .z-toast__dot {
+  color: var(--success);
+}
+
+.z-toast--warning .z-toast__dot {
+  color: var(--warning);
+}
+
+.z-toast--danger .z-toast__dot {
+  color: var(--danger);
+}
+
+.z-toast__text {
+  color: var(--text-primary);
+}
+
+/* --- Marca --------------------------------------------------------------- */
+
+.z-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.z-brand__mark {
+  display: block;
+  width: auto;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.z-brand__name {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.z-brand--lg .z-brand__mark {
+  height: 64px;
+}
+
+.z-brand--lg .z-brand__name {
+  font-size: var(--text-brand);
+}
+
+.z-brand--sm .z-brand__mark {
+  height: 30px;
+}
+
+.z-brand--sm .z-brand__name {
+  font-size: var(--text-subtitle);
+}
+
+/* Logomarca discreta em canto de interface (UISPEC secao 2b). */
+.z-brand-corner {
+  position: fixed;
+  right: var(--space-6);
+  bottom: var(--space-6);
+  height: 34px;
+  opacity: 0.18;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* --- Badges e pilulas ---------------------------------------------------- */
+
+.z-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-size: var(--text-meta);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.z-badge--neutral {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.z-badge--danger {
+  background: #ff3d5e26;
+  color: var(--danger);
+}
+
+.z-badge--success {
+  background: #2fd47a26;
+  color: var(--success);
+}
+
+/* --- Spinner ------------------------------------------------------------- */
+
+.z-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #ffffff2e;
+  border-top-color: var(--accent-hover);
+  animation: z-spin 800ms linear infinite;
+}
+
+.z-spinner--lg {
+  width: 34px;
+  height: 34px;
+  border-width: 3px;
+}

@@ -363,6 +363,7 @@ export class Session {
   private requestJoin(code: string): Promise<JoinAcceptPayload> {
     return new Promise<JoinAcceptPayload>((resolve, reject) => {
       let settled = false
+      let opened = false
       const connection = this.peerManager.connectToDoor(code)
 
       const finish = (action: () => void): void => {
@@ -385,6 +386,7 @@ export class Session {
       this.memberErrorListeners.add(onMemberError)
 
       connection.on('open', () => {
+        opened = true
         connection.send(
           createEnvelope(
             'JOIN_REQUEST',
@@ -415,7 +417,9 @@ export class Session {
       })
 
       connection.on('close', () => {
-        finish(() => reject(new JoinTimeoutError()))
+        // Canal que nunca abriu = nao existe door com esse codigo (sala nao
+        // encontrada). Fechou depois de aberto = o dono nao respondeu.
+        finish(() => reject(opened ? new JoinTimeoutError() : new RoomNotFoundError()))
       })
 
       connection.on('error', () => {

@@ -1,0 +1,223 @@
+/* Contrato visual do UISPEC (secao 2): tokens, tipografia e regras de movimento.
+   Nenhuma tela redefine identidade inline; tudo sai daqui. */
+
+/* Inter embutida como asset local (CSP font-src 'self'): zero download em runtime.
+   O arquivo e a variavel latina, entao cobre 400/500/600 com um unico download. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url('../assets/fonts/inter-latin-var.woff2') format('woff2');
+}
+
+:root {
+  /* Cores */
+  --bg-app: #0e0b12;
+  --bg-surface: #17131e;
+  --bg-elevated: #201a2b;
+  --bg-hover: #2a2138;
+  --accent: #9d00ff;
+  --accent-hover: #b23dff;
+  --accent-pressed: #7e00cc;
+  --accent-soft: #9d00ff26;
+  --text-primary: #f2eef7;
+  --text-secondary: #a99bc0;
+  --text-muted: #6e6285;
+  --success: #2fd47a;
+  --warning: #ffb224;
+  --danger: #ff3d5e;
+  --border: #2c2438;
+
+  /* Tipografia */
+  --font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --text-meta: 12px;
+  --text-secondary-size: 13px;
+  --text-body: 14px;
+  --text-subtitle: 16px;
+  --text-title: 20px;
+  --text-brand: 28px;
+
+  /* Geometria */
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-modal: 16px;
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --shadow-elevated: 0 8px 24px #00000066;
+
+  /* Movimento (somente transform/opacity) */
+  --dur-fast: 120ms;
+  --dur-enter: 180ms;
+  --dur-screen: 240ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* prefers-reduced-motion: duracoes zeradas em todo o app (UISPEC secao 2). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-enter: 0ms;
+    --dur-screen: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--text-body);
+  font-weight: 400;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Barra de rolagem discreta, no tom das superficies. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-hover);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a2f4c;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --- utilitarios -------------------------------------------------------- */
+
+.z-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.z-muted {
+  color: var(--text-muted);
+}
+
+.z-secondary {
+  color: var(--text-secondary);
+}
+
+.z-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- animacoes (apenas transform/opacity) -------------------------------- */
+
+@keyframes z-fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes z-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes z-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes z-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pulso do ponto "ao vivo": so opacity, custo zero de layout (UISPEC secao 2). */
+@keyframes z-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.z-screen-enter {
+  animation: z-fade-rise var(--dur-screen) var(--ease) both;
+}
+
+.z-fade-enter {
+  animation: z-fade-in var(--dur-enter) var(--ease) both;
+}
