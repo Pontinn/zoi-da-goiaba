@@ -30,6 +30,16 @@ if (userDataOverride) {
   app.setPath('userData', userDataOverride)
 }
 
+/** Apenas http/https podem ser entregues ao navegador do sistema. */
+function isExternalLink(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
@@ -52,10 +62,20 @@ function createWindow(): BrowserWindow {
 
   window.on('ready-to-show', () => window.show())
 
-  // Links externos nunca navegam dentro do app.
+  // Links externos nunca navegam dentro do app; nenhuma janela nova e criada
+  // pelo renderer (a janela flutuante do video usa o PiP nativo do Chromium).
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    // SO http/https vao para o navegador: `about:`, `file:` e afins entregues ao
+    // shell fazem o Windows abrir o dialogo "obter um aplicativo para abrir...".
+    if (isExternalLink(url)) void shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // Navegacao para fora do app tambem so acontece pelo navegador padrao.
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url === window.webContents.getURL()) return
+    event.preventDefault()
+    if (isExternalLink(url)) void shell.openExternal(url)
   })
 
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
