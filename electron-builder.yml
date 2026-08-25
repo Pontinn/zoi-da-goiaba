@@ -39,5 +39,5 @@ nsis:
 publish:
   provider: github
   owner: Pontinn
-  repo: screen-share
+  repo: zoi-da-goiaba
   releaseType: release

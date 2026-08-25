@@ -1,130 +1,77 @@
-# Zói da Goiaba
+<p align="center">
+  <img src="logo/logo-goiaba.png" alt="Zói da Goiaba" width="220">
+</p>
 
-Compartilhamento de tela P2P entre amigos, para Windows 10/11. Sem servidor de
-midia e sem servidor de estado: o video vai direto de um participante para o
-outro (mesh WebRTC) e a sala existe apenas enquanto alguem estiver nela.
+<h1 align="center">Zói da Goiaba</h1>
 
-- **Nome tecnico**: `ZoiDaGoiaba` (executavel `ZoiDaGoiaba.exe`)
-- **Instalador**: `ZoiDaGoiaba-Setup.exe`
-- **Plataforma**: Windows 10 e 11 (x64)
-
----
-
-## Requisitos de desenvolvimento
-
-- Node.js 22.12 ou superior
-- Windows (o app usa captura de tela e loopback de audio do Windows)
-
-## Instalacao das dependencias
-
-```bash
-npm install
-```
-
-Se o download do binario do Electron travar (proxy ou antivirus), aponte um
-espelho antes de instalar:
-
-```bash
-set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
-npm install
-```
-
-O npm 11 pede aprovacao para scripts de instalacao. As aprovacoes necessarias
-(`electron`, `esbuild`, `electron-winstaller`) ja estao registradas em
-`package.json` no campo `allowScripts`.
-
-## Scripts
-
-| Script | O que faz |
-|---|---|
-| `npm run dev` | Sobe o app em modo desenvolvimento (HMR no renderer) |
-| `npm run build` | Compila main, preload e renderer em `out/` |
-| `npm run typecheck` | TypeScript estrito nos dois alvos (node e web) |
-| `npm run lint` | ESLint em todo o projeto |
-| `npm run format` | Prettier |
-| `npm test` | Suite unitaria (Vitest) do nucleo de protocolo e estado de sala |
-| `npm run icon` | Regenera `build/icon.ico` a partir de `logo/icone.png` |
-| `npm run dist` | Gera o instalador em `release/` (sem publicar nada) |
-
-### Rodar varias instancias na mesma maquina
-
-O app tem trava de instancia unica por perfil. Para abrir duas ou tres copias em
-paralelo (util para testar uma sala), use um `userData` diferente em cada uma:
-
-```bash
-set ZOI_USER_DATA_DIR=C:\temp\zoi-a
-npm run dev
-```
+<p align="center">
+  Compartilhamento de tela P2P entre amigos. Sem servidor, sem mensalidade, só o zói.
+</p>
 
 ---
 
-## Gerar o instalador
+## O que é
+
+App desktop para Windows feito para um grupo de até 8 amigos compartilharem a
+tela (com áudio do sistema, se quiser) direto entre os PCs, usando uma malha
+WebRTC ponto a ponto. Não existe servidor de mídia no meio: o vídeo sai da sua
+placa e vai para o amigo, e só. A sinalização usa o servidor público do PeerJS,
+apenas para os peers se acharem.
+
+Nasceu para sessão de filme e noite de jogo entre amigos, não para reunião
+corporativa. Isso fica claro nos sons.
+
+## Funcionalidades
+
+- Salas com código, aleatório ou personalizado, e limite configurável de 2 a 8 pessoas
+- Várias transmissões simultâneas: cada um escolhe qual assistir
+- Áudio do sistema opcional junto com a tela
+- Presets de qualidade 720p30, 1080p30 e 1080p60, com adaptação automática
+- Fullscreen de verdade, com controles que somem sozinhos
+- Picture-in-picture para deixar num cantinho da tela
+- Volume local por espectador (você abaixa o seu, não o dos outros)
+- Dono da sala pode desconectar e banir, com transferência automática da coroa se ele cair
+- Reconexão automática, com janela de 15 segundos antes de dar alguém como perdido
+- Sons customizados, gravados na boca mesmo
+- Saudações e taglines aleatórias, direto da zoeira do grupo
+- Auto-update via GitHub Releases
+
+## Instalação
+
+1. Baixe o `ZoiDaGoiaba-Setup.exe` na página de
+   [Releases](https://github.com/Pontinn/zoi-da-goiaba/releases).
+2. Dois cliques e seguir o instalador.
+3. O aviso do SmartScreen ("O Windows protegeu o computador") é normal: o app
+   não é assinado digitalmente. Clique em **Mais informações** e depois em
+   **Executar assim mesmo**.
+
+Requer Windows 10 ou 11.
+
+## Como usar
+
+1. Crie uma sala e copie o código.
+2. Mande o código no grupo.
+3. Todo mundo entra com o código, e qualquer um pode transmitir a qualquer momento.
+
+## Desenvolvimento
+
+Requisitos: Node 24+ e Windows (a captura de tela e o loopback de áudio são do Windows).
 
 ```bash
-npm run dist
+npm install         # instala as dependências
+npm run dev         # sobe o app em modo desenvolvimento
+npm test            # testes unitários
+npm run test:e2e    # testes end to end
+npm run dist        # gera o instalador em release/
 ```
 
-O comando roda `electron-vite build && electron-builder --win --publish never`.
-O `--publish never` e obrigatorio e garante que o build NAO interage com o
-GitHub. Ao final, `release/` contem:
+## Arquitetura em uma frase
 
-- `ZoiDaGoiaba-Setup.exe` - o instalador NSIS (wizard, escolha de pasta, atalhos
-  na area de trabalho e no menu iniciar, instalacao por usuario e sem UAC)
-- `latest.yml` - o manifesto que o auto-update le
-- `ZoiDaGoiaba-Setup.exe.blockmap` - usado para download diferencial
-
-## Publicar uma versao (passo MANUAL do usuario)
-
-O projeto nunca publica nada sozinho: nao ha workflow de CI, nao ha push e nao
-ha `--publish` no build. Para ativar o auto-update, publique a release a mao:
-
-1. Suba a versao em `package.json` (ex.: `0.1.0` para `0.2.0`) e rode
-   `npm run dist`.
-2. No GitHub, em `Pontinn/screen-share`, crie uma **Release** nova com a tag
-   `v<versao>` (ex.: `v0.2.0`), exatamente igual a versao do `package.json`.
-3. Anexe a release **os dois arquivos**: `ZoiDaGoiaba-Setup.exe` e `latest.yml`.
-   Sem o `latest.yml` o app instalado nao consegue detectar a atualizacao.
-4. Publique a release (nao deixe como rascunho).
-
-A partir dai, cada app instalado checa a atualizacao ao abrir e no botao
-"verificar atualizacoes" das configuracoes. O download so comeca depois do
-aceite do usuario, e a instalacao acontece ao reiniciar o app.
-
-Enquanto nao existir nenhuma release publicada, a checagem termina em silencio
-(estado `none` ou `error` apenas no log), sem qualquer aviso na interface.
-
-## Aviso do SmartScreen
-
-O instalador nao tem assinatura de codigo (code signing). Na primeira execucao,
-o Windows SmartScreen pode exibir "O Windows protegeu o computador". Basta
-clicar em **Mais informacoes** e depois em **Executar assim mesmo**. Isso e
-esperado para um app privado distribuido entre amigos.
+Electron + malha WebRTC de até 8 peers, com o estado da sala distribuído nos
+próprios clientes via DataChannel (o dono da sala é a autoridade), PeerJS
+público só para sinalização e zero backend próprio.
 
 ---
 
-## Estrutura do projeto
-
-```
-src/
-  main/       processo principal (janela, settings, captura, updater)
-  preload/    ponte tipada `window.zoi` (contextIsolation + sandbox)
-  renderer/
-    src/
-      core/       nucleo PURO: protocolo, estado de sala, admissao, eleicao
-      services/   transporte: PeerJS, mesh, reconexao, midia, sons
-      ui/         telas e componentes
-  shared/     contratos usados pelos tres processos (IPC, protocolo, presets)
-tests/unit/   suite Vitest do nucleo puro
-audios/       fonte canonica dos 7 sons (copiados para o bundle do renderer)
-logo/         arte de origem do icone
-build/        icone gerado (icon.ico / icon.png)
-```
-
-## Notas de arquitetura
-
-- Sinalizacao pelo servidor publico do PeerJS; STUN publico do Google. Sem TURN:
-  quando a conexao direta falha (NAT simetrico), o app avisa quem nao conectou.
-- O estado da sala (participantes, dono, banidos) vive nos clientes e morre com
-  a sala. O cliente do dono e a autoridade de roster e moderacao.
-- Toda a decisao de sala fica em `renderer/src/core`, sem dependencia de
-  PeerJS, DOM ou Electron, e e coberta por testes unitarios.
+<sub>Projeto privado de um grupo de amigos, sem nenhuma garantia. Use por sua
+conta e risco. O nome e os sons são piada interna, não tente entender.</sub>
