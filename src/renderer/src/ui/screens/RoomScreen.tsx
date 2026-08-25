@@ -2,7 +2,7 @@
 // badges, grade de miniaturas ao vivo, fluxo de transmitir e moderacao do dono.
 import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import { PRESETS } from '@shared/presets'
-import { isOwner as computeIsOwner } from '../../core/room-state'
+import { isOwner as computeIsOwner, nicknameOf } from '../../core/room-state'
 import {
   CaptureFailedError,
   mediaManager,
@@ -26,6 +26,7 @@ import {
   LogoutIcon
 } from '../components/icons'
 import { copyText } from '../clipboard'
+import { PlayerView } from './PlayerView'
 
 export function RoomScreen(): JSX.Element {
   const room = useRoomStore((state) => state.room)
@@ -58,6 +59,8 @@ export function RoomScreen(): JSX.Element {
     }
     return labels
   }, [room.watching, room.transmissions, room.members])
+
+  const selected = selectedTxId === null ? null : (room.transmissions[selectedTxId] ?? null)
 
   const transmittingPeers = useMemo(
     () => new Set(transmissions.map((transmission) => transmission.peerId)),
@@ -202,7 +205,43 @@ export function RoomScreen(): JSX.Element {
         </aside>
 
         <main className="z-room__main">
-          {transmissions.length === 0 ? (
+          {selected ? (
+            <>
+              <PlayerView
+                key={selected.txId}
+                txId={selected.txId}
+                stream={streams.get(selected.txId) ?? null}
+                nickname={nicknameOf(room, selected.peerId)}
+                presetLabel={PRESETS[selected.presetId].label}
+                hasAudio={selected.hasAudio}
+                reconnecting={selected.status === 'reconnecting'}
+                quality={room.quality[selected.peerId]}
+                qualityTick={qualityTick}
+                onBack={() => selectTransmission(null)}
+              />
+              {transmissions.length > 1 ? (
+                <div className="z-strip">
+                  {transmissions
+                    .filter((transmission) => transmission.txId !== selected.txId)
+                    .map((transmission) => (
+                      <div className="z-strip__item" key={transmission.txId}>
+                        <StreamThumbnail
+                          txId={transmission.txId}
+                          stream={streams.get(transmission.txId) ?? null}
+                          nickname={nicknameOf(room, transmission.peerId)}
+                          presetLabel={PRESETS[transmission.presetId].label}
+                          hasAudio={transmission.hasAudio}
+                          isSelf={transmission.peerId === room.selfPeerId}
+                          watching={false}
+                          reconnecting={transmission.status === 'reconnecting'}
+                          onSelect={selectTransmission}
+                        />
+                      </div>
+                    ))}
+                </div>
+              ) : null}
+            </>
+          ) : transmissions.length === 0 ? (
             <div className="z-empty">
               <span className="z-empty__icon">
                 <BroadcastIcon size={26} />

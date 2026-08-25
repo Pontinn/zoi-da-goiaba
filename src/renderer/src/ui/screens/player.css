@@ -1,0 +1,249 @@
+/* Tela 5 do UISPEC (Assistindo): player embutido, fullscreen real, controles com
+   auto-hide (fade + slide 180ms) e overlay de reconexao. */
+
+.z-player {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000000;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.z-player--fullscreen {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Cursor some junto com os controles (RNF-07). */
+.z-player--idle {
+  cursor: none;
+}
+
+.z-player__video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000000;
+  display: block;
+}
+
+.z-player__pip-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--text-secondary);
+  text-align: center;
+  padding: var(--space-6);
+}
+
+/* --- Barra de controles --------------------------------------------------- */
+
+.z-controls {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-4) var(--space-3);
+  background: linear-gradient(to top, #000000d9, #00000000);
+  color: #ffffff;
+  transition:
+    opacity var(--dur-enter) var(--ease),
+    transform var(--dur-enter) var(--ease);
+}
+
+.z-controls--hidden {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+
+.z-controls__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 32px;
+  min-width: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid #ffffff2e;
+  border-radius: var(--radius-control);
+  background: #00000059;
+  color: #ffffff;
+  font-size: var(--text-secondary-size);
+  cursor: pointer;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease);
+}
+
+.z-controls__btn:hover {
+  background: #ffffff26;
+  transform: translateY(-1px);
+}
+
+.z-controls__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 30vw;
+}
+
+.z-controls__spacer {
+  flex: 1;
+}
+
+.z-controls__tag {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: #00000073;
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Volume --------------------------------------------------------------- */
+
+.z-volume {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.z-volume__slider {
+  width: 96px;
+  height: 4px;
+  appearance: none;
+  border-radius: var(--radius-pill);
+  background: #ffffff40;
+  cursor: pointer;
+}
+
+.z-volume__slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 0;
+}
+
+/* --- Overlay de reconexao -------------------------------------------------- */
+
+.z-reconnect {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background: #000000a6;
+  color: var(--text-primary);
+  animation: z-fade-in var(--dur-enter) var(--ease) both;
+}
+
+.z-reconnect__text {
+  font-size: var(--text-subtitle);
+  font-weight: 500;
+}
+
+.z-reconnect__hint {
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+}
+
+/* --- Faixa de outras transmissoes ------------------------------------------ */
+
+.z-strip {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+  flex: none;
+}
+
+.z-strip__item {
+  width: 190px;
+  flex: none;
+}
+
+/* --- Janela flutuante (PiP) ------------------------------------------------ */
+
+.z-pip-body {
+  margin: 0;
+  background: #000000;
+  overflow: hidden;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+.z-pip-shell {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #000000;
+}
+
+.z-pip-shell video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000000;
+}
+
+.z-pip-bar {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 10px 8px;
+  background: linear-gradient(to top, #000000d9, #00000000);
+  color: #ffffff;
+  font-size: 12px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 180ms cubic-bezier(0.2, 0, 0, 1),
+    transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.z-pip-shell:hover .z-pip-bar {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.z-pip-bar button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #ffffff2e;
+  border-radius: 6px;
+  background: #00000059;
+  color: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.z-pip-bar input[type='range'] {
+  width: 80px;
+}
+
+.z-pip-bar__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.z-pip-bar__spacer {
+  flex: 1;
+}

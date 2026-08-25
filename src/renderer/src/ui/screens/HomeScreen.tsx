@@ -8,7 +8,7 @@ import { Button, IconButton } from '../components/Button'
 import { GearIcon, GoIcon, KeyIcon, PlusIcon } from '../components/icons'
 import { SettingsModal } from '../components/SettingsModal'
 import { readLastRoom } from '../last-room'
-import { pickTagline } from '../taglines'
+import { pickGreeting, pickTagline } from '../taglines'
 
 /** Realce radial que segue o cursor dentro do card (custom properties). */
 function trackPointer(event: MouseEvent<HTMLElement>): void {
@@ -24,6 +24,7 @@ export function HomeScreen(): JSX.Element {
   const setRoute = useAppStore((state) => state.setRoute)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Sorteadas uma vez por montagem da tela (uma por abertura do app).
+  const [greeting] = useState(() => pickGreeting())
   const [tagline] = useState(() => pickTagline())
   const [lastRoom] = useState(() => readLastRoom())
 
@@ -104,8 +105,10 @@ export function HomeScreen(): JSX.Element {
         <div className="z-panel z-panel--wide">
           <div className="z-hero">
             <div className="z-hero__text">
-              <h2 className="z-hero__greeting">
-                E ai, <span className="z-hero__name">{nickname}</span>!
+              <h2 className="z-hero__greeting" data-testid="greeting">
+                {greeting.before}
+                <span className="z-hero__name">{nickname}</span>
+                {greeting.after}
               </h2>
               <p className="z-hero__tagline">{tagline}</p>
             </div>
