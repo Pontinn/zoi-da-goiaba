@@ -71,7 +71,7 @@ mode: project-identity. Superficie de UI minima: toggle do modo nitidez no fluxo
 
 ## 12. Pontos em aberto (lista viva)
 
-- P1: Criterio exato de deteccao de encoder de hardware no Electron/Chromium (MediaCapabilities API? navigator.mediaCapabilities.encodingInfo?).
+- P1: Criterio exato de deteccao de encoder de hardware no Electron/Chromium. ESBOCO discutido com o usuario (2026-08-25), validar na SPEC: (1) DETECCAO com navigator.mediaCapabilities.encodingInfo({type:'webrtc', video:{contentType/width/height/framerate/bitrate do preset}}) por codec (AV1, VP9, H264): escolher o melhor com powerEfficient=true (hardware); sem hardware nenhum, VP8/VP9 conforme CPU. Complemento: RTCRtpSender.getCapabilities('video') para o que e negociavel. (2) VERIFICACAO pos-conexao via getStats(): encoderImplementation (hw vs sw de verdade) e qualityLimitationReason=='cpu' como gatilho de rebaixamento automatico + redial (mesmo espirito do watchdog de midia existente). (3) LADO RECEPTOR: decodificar tambem conta (AV1 sw em notebook velho engasga); considerar cada membro anunciar no mesh o que decodifica bem (mediaCapabilities.decodingInfo) e o transmissor escolher codec que sirva a sala toda: decisao da SPEC.
 - P2: AV1 vs VP9 como alvo principal (medir nas maquinas reais do grupo).
 - P3: Onde vive o toggle do modo nitidez e se persiste.
 - P4: Criterio de aceitacao mensuravel ("melhorou"): comparacao lado a lado? bitrate/qualidade nos stats?
