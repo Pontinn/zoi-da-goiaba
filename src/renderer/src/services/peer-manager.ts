@@ -27,6 +27,12 @@ import {
 import { toPeerId } from '../core/room-code'
 import { observeSignalingCandidates } from './ice-diagnostics'
 
+/** Metadata de uma chamada de midia. `pull` = o espectador e quem discou. */
+export interface CallMetadata {
+  txId: string
+  pull?: boolean
+}
+
 export type PeerErrorType = PeerError<string>['type']
 
 /**
@@ -245,7 +251,7 @@ export class PeerManager {
   }
 
   /** Chamada de midia para um membro, com o txId no metadata (correlacao RF-24). */
-  call(peerId: string, stream: MediaStream, metadata: { txId: string }): MediaConnection {
+  call(peerId: string, stream: MediaStream, metadata: CallMetadata): MediaConnection {
     return this.requireMemberPeer().call(peerId, stream, { metadata })
   }
 

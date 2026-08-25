@@ -44,6 +44,7 @@ import {
   PeerManager,
   RoomCodeUnavailableError,
   SignalingError,
+  type CallMetadata,
   type DoorHealth
 } from './peer-manager'
 import { ReconnectionManager } from './reconnection'
@@ -447,7 +448,7 @@ export class Session {
   }
 
   /** Chamada de midia para um membro, com o txId no metadata (Sprint 5). */
-  callPeer(peerId: string, stream: MediaStream, metadata: { txId: string }): MediaConnection {
+  callPeer(peerId: string, stream: MediaStream, metadata: CallMetadata): MediaConnection {
     return this.peerManager.call(peerId, stream, metadata)
   }
 

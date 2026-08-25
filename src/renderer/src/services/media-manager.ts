@@ -54,6 +54,40 @@ interface PendingCall {
   receivedAt: number
 }
 
+/** Chamada REVERSA aberta pelo espectador + a stream ficticia que ela exige. */
+interface PullCall {
+  call: MediaConnection
+  stream: MediaStream
+}
+
+function stopTracks(stream: MediaStream): void {
+  for (const track of stream.getTracks()) track.stop()
+}
+
+/**
+ * Stream exigida pelo PeerJS no `call`. O espectador nao tem nada para enviar,
+ * entao vai um canvas 2x2 com `captureStream(0)`: sem timer por quadro, sem
+ * captura de nada e custo praticamente zero (pilar de performance).
+ */
+export function createDummyStream(): MediaStream | null {
+  try {
+    if (typeof document === 'undefined') return null
+    const canvas = document.createElement('canvas')
+    canvas.width = 2
+    canvas.height = 2
+    const context = canvas.getContext('2d')
+    if (context) {
+      context.fillStyle = '#000000'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+    }
+    const stream = canvas.captureStream(0)
+    return stream.getTracks().length > 0 ? stream : null
+  } catch (error) {
+    console.warn('[media] nao foi possivel criar a stream ficticia da chamada reversa:', error)
+    return null
+  }
+}
+
 /** Chamada de saida + o descarte do diagnostico de ICE dela. */
 interface OutgoingCall {
   call: MediaConnection
@@ -89,12 +123,20 @@ export class MediaManager implements MediaHooks {
   private readonly incomingWatches = new Map<string, IncomingWatch>()
   /** txIds cuja midia foi anunciada e nunca chegou (AC-25). */
   private readonly mediaFailures = new Set<string>()
+  /** txId -> chamada reversa aberta por ESTE espectador (fallback de direcao). */
+  private readonly pullCalls = new Map<string, PullCall>()
+  /** txIds que ja tentaram a chamada reversa nesta falha (uma tentativa so). */
+  private readonly pullAttempts = new Set<string>()
   private readonly pendingCalls: PendingCall[] = []
   private pendingTimer: ReturnType<typeof setInterval> | null = null
   private readonly streamsListeners = new Set<StreamsListener>()
   private readonly failuresListeners = new Set<FailuresListener>()
 
-  constructor(private readonly session: Session) {}
+  constructor(
+    private readonly session: Session,
+    /** Injetavel nos testes: o canvas so existe no renderer. */
+    private readonly createPullStream: () => MediaStream | null = createDummyStream
+  ) {}
 
   // --- consulta ------------------------------------------------------------
 
@@ -344,10 +386,17 @@ export class MediaManager implements MediaHooks {
       return
     }
 
-    const metadata = call.metadata as { txId?: unknown } | null | undefined
+    const metadata = call.metadata as { txId?: unknown; pull?: unknown } | null | undefined
     const txId = typeof metadata?.txId === 'string' ? metadata.txId : null
     if (!txId) {
       call.close()
+      return
+    }
+
+    // Chamada REVERSA: o espectador esta puxando a midia porque a chamada que
+    // saiu daqui nunca chegou nele.
+    if (metadata?.pull === true) {
+      this.answerPull(call, txId)
       return
     }
 
@@ -399,10 +448,15 @@ export class MediaManager implements MediaHooks {
   private answerCall(call: MediaConnection, txId: string): void {
     this.incomingCalls.get(txId)?.close()
     this.stopIncomingWatch(txId)
-    this.incomingCalls.set(txId, call)
     // Espectador nao devolve midia: a chamada e unidirecional.
     call.answer()
-    this.startIncomingWatch(call, txId)
+    this.bindIncoming(call, txId, `media-in:${shortPeerId(call.peer)}`)
+  }
+
+  /** Liga uma chamada de ENTRADA (recebida ou puxada) ao txId dela. */
+  private bindIncoming(call: MediaConnection, txId: string, tag: string): void {
+    this.incomingCalls.set(txId, call)
+    this.startIncomingWatch(call, txId, tag)
     call.on('stream', (stream: MediaStream) => {
       this.remoteStreams.set(txId, stream)
       this.watchIncomingTrack(txId, stream)
@@ -413,23 +467,107 @@ export class MediaManager implements MediaHooks {
       this.incomingCalls.delete(txId)
       this.stopIncomingWatch(txId)
       this.clearMediaFailure(txId)
+      this.closePull(txId)
       this.remoteStreams.delete(txId)
       this.notifyStreams()
     })
     call.on('error', (error) => {
-      console.warn(`[media] erro na chamada recebida de ${call.peer}:`, error)
+      console.warn(`[media] erro na chamada de midia com ${call.peer}:`, error)
     })
+  }
+
+  /** Solta a chamada de entrada atual do txId SEM apagar o estado de falha. */
+  private detachIncoming(txId: string): void {
+    const previous = this.incomingCalls.get(txId)
+    this.incomingCalls.delete(txId)
+    this.stopIncomingWatch(txId)
+    if (!previous) return
+    previous.close()
+    if (this.remoteStreams.delete(txId)) this.notifyStreams()
+  }
+
+  // --- fallback de direcao da midia ---------------------------------------
+
+  /**
+   * Lado ESPECTADOR: a chamada do transmissor nao chegou. Sem TURN (RF-42) uma
+   * das duas direcoes pode simplesmente nunca fechar o ICE, entao vale tentar a
+   * outra: quem disca agora e quem quer assistir. Uma tentativa por falha.
+   */
+  private startMediaPull(txId: string): void {
+    if (this.pullAttempts.has(txId)) return
+    const state = this.session.getState()
+    const txPeerId = state.transmissions[txId]?.peerId ?? ''
+    if (txPeerId === '' || txPeerId === state.selfPeerId) return
+    if (!state.members.some((member) => member.peerId === txPeerId)) return
+    this.pullAttempts.add(txId)
+
+    const dummy = this.createPullStream()
+    if (!dummy) return
+
+    let call: MediaConnection
+    try {
+      call = this.session.callPeer(txPeerId, dummy, { txId, pull: true })
+    } catch (error) {
+      console.warn(`[media] nao foi possivel puxar a transmissao ${txId}:`, error)
+      stopTracks(dummy)
+      return
+    }
+
+    console.info(`[media] a chamada de ${txPeerId} nao chegou; puxando ${txId} na outra direcao`)
+    this.closePull(txId)
+    this.detachIncoming(txId)
+    this.pullCalls.set(txId, { call, stream: dummy })
+    this.bindIncoming(call, txId, `media-pull-out:${shortPeerId(txPeerId)}`)
+  }
+
+  /**
+   * Lado TRANSMISSOR: um espectador puxou a transmissao LOCAL ativa. A chamada
+   * reversa vira o canal de envio para aquele par, no lugar da que falhou.
+   */
+  private answerPull(call: MediaConnection, txId: string): void {
+    const transmission = this.local
+    if (!transmission || transmission.txId !== txId) {
+      console.warn(`[media] ${call.peer} pediu uma transmissao que nao esta no ar (${txId})`)
+      call.close()
+      return
+    }
+
+    const peerId = call.peer
+    console.info(`[media] ${peerId} puxou a transmissao ${txId}; respondendo pela outra direcao`)
+    // A chamada antiga para este par morreu: a nova toma o lugar dela.
+    this.closeOutgoing(peerId)
+    this.outgoingCalls.set(peerId, {
+      call,
+      disposeIce: observePeerJsIce(call, `media-pull-in:${shortPeerId(peerId)}`)
+    })
+    call.answer(transmission.stream)
+    call.on('close', () => {
+      if (this.outgoingCalls.get(peerId)?.call === call) this.closeOutgoing(peerId)
+    })
+    call.on('error', (error) => {
+      console.warn(`[media] erro na chamada puxada por ${peerId}:`, error)
+    })
+    this.applySenderParameters(call, transmission.presetId)
+  }
+
+  /** Encerra a chamada reversa de um txId e para as tracks ficticias dela. */
+  private closePull(txId: string): void {
+    const pull = this.pullCalls.get(txId)
+    if (!pull) return
+    this.pullCalls.delete(txId)
+    stopTracks(pull.stream)
+    pull.call.close()
   }
 
   // --- vigia da midia recebida (tela preta silenciosa) ---------------------
 
-  private startIncomingWatch(call: MediaConnection, txId: string): void {
+  private startIncomingWatch(call: MediaConnection, txId: string, tag: string): void {
     const watch: IncomingWatch = {
       call,
       timer: null,
       connectionTimer: null,
       connectionAttempts: 0,
-      disposeIce: observePeerJsIce(call, `media-in:${shortPeerId(call.peer)}`),
+      disposeIce: observePeerJsIce(call, tag),
       detachConnection: null,
       detachTrack: null
     }
@@ -504,9 +642,13 @@ export class MediaManager implements MediaHooks {
     this.mediaFailures.add(txId)
     this.notifyMediaFailures()
     this.session.notifyMediaFailure(txId, peerId)
+    // Ultimo recurso: tentar a direcao contraria antes de desistir de vez.
+    this.startMediaPull(txId)
   }
 
   private clearMediaFailure(txId: string): void {
+    // A falha acabou: uma falha futura tem direito a uma nova chamada reversa.
+    this.pullAttempts.delete(txId)
     if (!this.mediaFailures.delete(txId)) return
     console.info(`[media] a transmissao ${txId} finalmente chegou; erro removido`)
     this.notifyMediaFailures()
@@ -540,6 +682,7 @@ export class MediaManager implements MediaHooks {
   dropRemote(txId: string): void {
     this.stopIncomingWatch(txId)
     this.clearMediaFailure(txId)
+    this.closePull(txId)
     this.incomingCalls.get(txId)?.close()
     this.incomingCalls.delete(txId)
     if (this.remoteStreams.delete(txId)) this.notifyStreams()
@@ -551,6 +694,8 @@ export class MediaManager implements MediaHooks {
       this.pendingTimer = null
     }
     for (const pending of this.pendingCalls.splice(0)) pending.call.close()
+    for (const txId of [...this.pullCalls.keys()]) this.closePull(txId)
+    this.pullAttempts.clear()
     for (const txId of [...this.incomingWatches.keys()]) this.stopIncomingWatch(txId)
     if (this.mediaFailures.size > 0) {
       this.mediaFailures.clear()
