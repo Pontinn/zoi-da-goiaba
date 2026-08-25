@@ -2,6 +2,7 @@
 // Serve para exercitar a superficie IPC e os sons sem UI definitiva.
 import { useEffect, useState } from 'react'
 import type { CaptureSource } from '@shared/ipc'
+import { MediaManager, mediaManager } from './services/media-manager'
 import { Session, session } from './services/session'
 import {
   playSound,
@@ -48,7 +49,14 @@ export default function App(): JSX.Element {
       soundUrls: SOUND_URLS,
       playSound,
       session,
-      createSession: (): Session => new Session()
+      mediaManager,
+      createSession: (): Session => new Session(),
+      createSessionWithMedia: (): { session: Session; media: MediaManager } => {
+        const created = new Session()
+        const media = new MediaManager(created)
+        created.setMediaHooks(media)
+        return { session: created, media }
+      }
     }
     void window.zoi.settings.get().then((settings) => {
       setInstallId(settings.installId)

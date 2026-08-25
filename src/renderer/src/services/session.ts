@@ -87,6 +87,8 @@ export interface MediaHooks {
   onPeerRecovered(peerId: string): void
   /** Chamada de midia recebida no member peer. */
   onIncomingCall(call: MediaConnection): void
+  /** A transmissao saiu do estado (TX_STOP ou remocao do transmissor). */
+  dropRemote(txId: string): void
   /** Encerra a transmissao local (saida da sala, troca de fonte). */
   stopLocal(reason: TxStopReason): void
   /** Conexoes de ENTRADA para o monitor de qualidade. */
@@ -107,6 +109,7 @@ const noopMediaHooks: MediaHooks = {
   onMemberJoined: () => {},
   onPeerRecovered: () => {},
   onIncomingCall: (call) => call.close(),
+  dropRemote: () => {},
   stopLocal: () => {},
   inboundConnections: () => [],
   teardown: () => {}
@@ -350,6 +353,11 @@ export class Session {
     this.mesh.send(peerId, message)
   }
 
+  /** Chamada de midia para um membro, com o txId no metadata (Sprint 5). */
+  callPeer(peerId: string, stream: MediaStream, metadata: { txId: string }): MediaConnection {
+    return this.peerManager.call(peerId, stream, metadata)
+  }
+
   // --- ingresso ------------------------------------------------------------
 
   private requestJoin(code: string): Promise<JoinAcceptPayload> {
@@ -531,9 +539,15 @@ export class Session {
 
   dispatch(event: RoomEvent): void {
     const previousMembers = this.state.members.map((member) => member.peerId)
+    const previousTxIds = Object.keys(this.state.transmissions)
     const result = reduce(this.state, event)
     this.state = result.state
     this.runEffects(result.effects)
+
+    // Transmissoes que sairam do estado liberam a chamada e a stream recebida.
+    for (const txId of previousTxIds) {
+      if (!this.state.transmissions[txId]) this.mediaHooks.dropRemote(txId)
+    }
 
     // Membros novos no roster: abrir mesh e avisar a midia (re-call, RF-22).
     const joined = this.state.members
