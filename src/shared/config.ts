@@ -21,6 +21,14 @@ export const MESH_CONNECT_TIMEOUT_MS = 20_000
  */
 export const MESH_CONNECT_RETRY_INTERVAL_MS = 5_000
 
+/**
+ * Corrida de dial simultaneo no mesh: depois que a PRIMEIRA conexao de um par
+ * abre, a outra continua viva por esta janela. Se as duas abrirem dentro dela, o
+ * desempate lexicografico decide (os dois lados chegam ao mesmo resultado); se
+ * so uma abrir, ela fica e a outra e fechada no fim da janela.
+ */
+export const MESH_RACE_GRACE_MS = 1_500
+
 /** Re-dial durante a janela de reconexao. */
 export const RECONNECT_REDIAL_INTERVAL_MS = 3_000
 
