@@ -6,7 +6,15 @@ import prettier from 'eslint-config-prettier'
 
 export default tseslint.config(
   {
-    ignores: ['node_modules/**', 'out/**', 'dist/**', 'release/**', 'build/**', 'coverage/**']
+    ignores: [
+      'node_modules/**',
+      'out/**',
+      'dist/**',
+      'release/**',
+      'build/**',
+      'coverage/**',
+      'native/**/build/**'
+    ]
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -20,6 +28,12 @@ export default tseslint.config(
       '*.mjs'
     ],
     languageOptions: { globals: globals.node }
+  },
+  {
+    // Pacote nativo local: CommonJS puro, carregado pelo worker do Electron.
+    files: ['native/**/*.js'],
+    languageOptions: { sourceType: 'commonjs', globals: globals.node },
+    rules: { '@typescript-eslint/no-require-imports': 'off' }
   },
   {
     files: ['src/renderer/**/*.{ts,tsx}'],

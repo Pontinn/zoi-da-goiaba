@@ -10,6 +10,16 @@ directories:
 files:
   - out/**
   - package.json
+  # O node-gyp deixa intermediarios (obj, lib, pdb, projeto do MSBuild) ao lado
+  # do binario: so o .node precisa viajar no instalador.
+  - '!node_modules/zoi-audio-capture/build/Release/obj'
+  - '!node_modules/zoi-audio-capture/build/Release/*.{exp,iobj,ipdb,lib,pdb}'
+  - '!node_modules/zoi-audio-capture/build/*.{sln,vcxproj,filters,gypi}'
+
+# O binario nativo de captura de audio nao carrega de dentro do asar: precisa
+# ficar desempacotado em app.asar.unpacked.
+asarUnpack:
+  - '**/*.node'
 
 # A pasta audios/ da raiz NAO e empacotada: os 7 sons ja entram no bundle do
 # renderer como assets do Vite (src/renderer/src/assets/audios).

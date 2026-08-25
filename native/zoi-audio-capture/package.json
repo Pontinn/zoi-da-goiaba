@@ -1,0 +1,18 @@
+{
+  "name": "zoi-audio-capture",
+  "version": "0.1.0",
+  "description": "Captura de audio do Windows (WASAPI Process Loopback) com exclusao de arvores de processo.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "UNLICENSED",
+  "private": true,
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["index.js", "index.d.ts", "binding.gyp", "src/**"],
+  "scripts": {
+    "install": "node-gyp rebuild"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.5.0"
+  }
+}
