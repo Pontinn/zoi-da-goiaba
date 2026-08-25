@@ -506,8 +506,11 @@ describe('media-manager / espectador puxa a midia quando a chamada falha', () =>
 
     expect(manager.getMediaFailures().size).toBe(0)
     expect(manager.getStreams().has('tx1')).toBe(true)
-    // A conexao da reversa entra no monitor de qualidade do espectador.
-    expect(manager.inboundConnections()).toHaveLength(1)
+    // A conexao da reversa entra no monitor de qualidade do espectador, ja
+    // ETIQUETADA pela transmissao (o que permite ler quadros por txId).
+    const entries = manager.inboundEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.txId).toBe('tx1')
     manager.teardown()
   })
 
@@ -620,7 +623,7 @@ describe('media-manager / transmissor respondendo a chamada reversa', () => {
     expect(pull.closed).toBe(false)
 
     // A reversa e canal de SAIDA: nao pode contar como entrada no transmissor.
-    expect(manager.inboundConnections()).toEqual([])
+    expect(manager.inboundEntries()).toEqual([])
 
     manager.teardown()
     expect(pull.closed).toBe(true)
