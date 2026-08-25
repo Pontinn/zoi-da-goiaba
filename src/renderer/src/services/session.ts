@@ -127,6 +127,8 @@ export class Session {
   private readonly rttByPeer = new Map<string, number>()
 
   private toastSeq = 0
+  /** Registro do door em andamento (evita dois takeovers concorrentes). */
+  private doorRegistration: Promise<void> | null = null
   private rebroadcastTimer: ReturnType<typeof setInterval> | null = null
   private quarantineTimer: ReturnType<typeof setInterval> | null = null
 
@@ -290,10 +292,13 @@ export class Session {
     })
     this.startBackgroundTimers()
 
-    // Abre o mesh com CADA membro e se apresenta.
+    // O mesh com cada membro ja foi aberto pelo `dispatch` acima (todo mundo do
+    // snapshot entra como "novo"). Discar de novo aqui abriria uma SEGUNDA
+    // DataConnection por par e derrubaria a primeira no meio da negociacao,
+    // atrasando o link em centenas de ms. Aqui so falta se apresentar: o `send`
+    // enfileira ate o canal abrir.
     for (const member of accept.members) {
       if (member.peerId === selfPeerId) continue
-      this.dial(member.peerId)
       this.mesh.send(member.peerId, {
         type: 'HELLO',
         payload: { nickname: this.nickname, joinedAt: Date.now() }
@@ -594,6 +599,9 @@ export class Session {
         case 'assumeOwnership':
           void this.assumeOwnership(effect.rebroadcast)
           break
+        case 'releaseDoor':
+          this.peerManager.closeDoor()
+          break
         case 'scheduleRedial':
           this.reconnection.enableBackgroundRetry(effect.peerId)
           break
@@ -610,25 +618,33 @@ export class Session {
   private async assumeOwnership(rebroadcast: boolean): Promise<void> {
     const code = this.state.roomMeta?.code
     if (!code) return
-    if (!this.peerManager.hasDoor) {
-      try {
-        // Sempre "takeover": o id do dono anterior leva alguns segundos para ser
-        // liberado pelo servidor PeerJS (risco R5). O modo "create" so aparece em
-        // `createRoom`, onde `unavailable-id` significa mesmo "codigo em uso".
-        await this.peerManager.openDoor(code, 'takeover')
-      } catch (error) {
-        if (error instanceof RoomCodeUnavailableError || error instanceof SignalingError) {
-          console.warn('[session] nao foi possivel registrar o door peer:', error.message)
-          this.emitToast(
-            'warning',
-            'A sala segue funcionando, mas novas entradas podem falhar por alguns segundos.'
-          )
-          return
-        }
-        throw error
-      }
-    }
+    // A re-emissao nao pode esperar o registro do door: sao coisas independentes
+    // e o registro pode levar segundos (retry de id ocupado).
     if (rebroadcast) this.startOwnerRebroadcast()
+    // Dois efeitos podem pedir a posse quase juntos (OWNER_TRANSFER + snapshot):
+    // sem esta trava o segundo registro destruiria o door que o primeiro abriu.
+    if (this.peerManager.hasDoor || this.doorRegistration !== null) return
+
+    const registration = this.peerManager.openDoor(code, 'takeover')
+    this.doorRegistration = registration
+    try {
+      // Sempre "takeover": o id do dono anterior pode levar alguns segundos para
+      // ser liberado pelo servidor PeerJS (risco R5). O modo "create" so aparece
+      // em `createRoom`, onde `unavailable-id` significa mesmo "codigo em uso".
+      await registration
+    } catch (error) {
+      if (error instanceof RoomCodeUnavailableError || error instanceof SignalingError) {
+        console.warn('[session] nao foi possivel registrar o door peer:', error.message)
+        this.emitToast(
+          'warning',
+          'A sala segue funcionando, mas novas entradas podem falhar por alguns segundos.'
+        )
+        return
+      }
+      throw error
+    } finally {
+      if (this.doorRegistration === registration) this.doorRegistration = null
+    }
   }
 
   /**

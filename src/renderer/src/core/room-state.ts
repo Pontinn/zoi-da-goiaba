@@ -125,6 +125,8 @@ export type Effect =
   | { kind: 'log'; level: 'info' | 'warn'; text: string }
   /** O cliente virou dono: registrar o door peer e passar a emitir ROSTER_UPDATE. */
   | { kind: 'assumeOwnership'; rebroadcast: boolean }
+  /** Dono saindo: liberar o id do door ANTES de anunciar a transferencia (R5). */
+  | { kind: 'releaseDoor' }
   /** Par inalcancavel que segue no roster do dono: tentar reconectar em background. */
   | { kind: 'scheduleRedial'; peerId: string }
   /** Encerrar a sessao P2P local (destruir peers). */
@@ -499,7 +501,11 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
         }
       ]
       if (target.peerId === state.selfPeerId) {
-        effects.push({ kind: 'assumeOwnership', rebroadcast: false })
+        // Re-emissao do primeiro ROSTER_UPDATE (secao 2.7): na saida voluntaria o
+        // OWNER_TRANSFER e o ROSTER_UPDATE do sucessor viajam por links
+        // diferentes, entao um membro pode receber o snapshot ANTES de adotar o
+        // novo dono e rejeita-lo. Sem a re-emissao, esse membro nunca converge.
+        effects.push({ kind: 'assumeOwnership', rebroadcast: true })
       }
       return { state: nextState, effects }
     }
@@ -626,7 +632,16 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
       if (!senderIsMember) return { state, effects: [] }
       const effects: Effect[] = [{ kind: 'closeConnection', peerId: from }]
       // Nao-dono apenas fecha a conexao: o som e o roster vem do ROSTER_UPDATE do dono.
-      if (!isOwner(state)) return { state, effects }
+      if (!isOwner(state)) {
+        // O DONO avisou que esta saindo: o link com ele deixa de ser saudavel na
+        // hora. Sem isso a condicao (b) do handover (secao 2.7) continuaria vendo
+        // um dono "up" que ja nao existe, e o snapshot do sucessor seria rejeitado
+        // para sempre (o `closeConnection` acima nao gera evento de link).
+        if (from === state.ownerPeerId) {
+          return { state: { ...state, peerLinks: withLink(state, from, 'timeout', now) }, effects }
+        }
+        return { state, effects }
+      }
       return removeMemberAsOwner(state, from, 'leave', effects)
     }
 
@@ -1418,6 +1433,10 @@ function applySelfLeave(state: RoomState): ReducerResult {
   if (isOwner(state)) {
     const successor = electOwnerExcluding(state.members, state.selfPeerId)
     if (successor) {
+      // O id do door e derivado do codigo da sala e e GLOBAL no PeerJS: enquanto
+      // este cliente o mantiver registrado, o sucessor recebe `unavailable-id`.
+      // Liberar ANTES de anunciar da ao sucessor a porta livre (risco R5).
+      effects.push({ kind: 'releaseDoor' })
       // RF-35: OWNER_TRANSFER vai imediatamente antes do LEAVE. Quem remove o
       // dono que saiu do roster e o NOVO dono, ao receber o LEAVE em seguida.
       // A ban list (RF-36) ja esta replicada em todos pelos ROSTER_UPDATE

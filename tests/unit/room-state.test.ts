@@ -917,6 +917,21 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
     expect(result.state.endReason).toBe('left')
   })
 
+  it('SELF_LEAVE do dono libera o door ANTES de anunciar a transferencia (R5)', () => {
+    const state = ownerState([member('owner', 1, true), member('b', 5), member('c', 2)], 5)
+    const result = reduce(state, { kind: 'SELF_LEAVE', now: 1_000 })
+    const order = kinds(result.effects)
+    expect(order).toContain('releaseDoor')
+    expect(order.indexOf('releaseDoor')).toBeLessThan(order.indexOf('broadcast'))
+  })
+
+  it('sem sucessor o dono nao libera o door nem anuncia transferencia', () => {
+    const state = ownerState([member('owner', 1, true)], 5)
+    const result = reduce(state, { kind: 'SELF_LEAVE', now: 1_000 })
+    expect(kinds(result.effects)).not.toContain('releaseDoor')
+    expect(broadcasts(result.effects)).toEqual([{ type: 'LEAVE', payload: {} }])
+  })
+
   it('o sucessor assume ao receber OWNER_TRANSFER e remove o ex-dono no LEAVE', () => {
     const state = joinedState('c', [member('owner', 1, true), member('b', 5), member('c', 2)], 'owner', 5)
     const transferred = reduce(state, {
@@ -930,7 +945,9 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
     })
     expect(transferred.state.ownerPeerId).toBe('c')
     expect(transferred.state.rosterVersion).toBe(6)
-    expect(kinds(transferred.effects)).toContain('assumeOwnership')
+    // Re-emissao ligada: quem receber o snapshot antes do OWNER_TRANSFER precisa
+    // de uma segunda chance para convergir (secao 2.7).
+    expect(transferred.effects).toContainEqual({ kind: 'assumeOwnership', rebroadcast: true })
 
     const left = reduce(transferred.state, {
       kind: 'MESSAGE',
@@ -1014,6 +1031,53 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
     expect(broadcasts(result.effects)[0]).toMatchObject({
       payload: { lastChange: { kind: 'leave', targetPeerId: 'b' } }
     })
+  })
+
+  it('LEAVE do DONO destrava o handover para o membro que perdeu o OWNER_TRANSFER', () => {
+    // O membro "me" recebe o LEAVE do dono mas nunca recebeu o OWNER_TRANSFER
+    // (viajaram por links diferentes). O snapshot do sucessor "b" so pode ser
+    // aceito se o link com o ex-dono deixar de contar como saudavel.
+    const members = [member('owner', 1, true), member('b', 2), member('me', 3)]
+    const joined = joinedState('me', members, 'owner', 5)
+    const linked: RoomState = {
+      ...joined,
+      peerLinks: Object.fromEntries(
+        ['owner', 'b'].map((peerId) => [
+          peerId,
+          { peerId, status: 'up' as const, since: 1, lastSeenAt: 1 }
+        ])
+      )
+    }
+
+    const snapshotFromB: RoomEvent = {
+      kind: 'MESSAGE',
+      from: 'b',
+      now: 200,
+      message: {
+        type: 'ROSTER_UPDATE',
+        payload: rosterUpdate({
+          rosterVersion: 7,
+          ownerPeerId: 'b',
+          members: [member('b', 2, true), member('me', 3)],
+          lastChange: { kind: 'transfer', targetPeerId: 'b' }
+        })
+      }
+    }
+
+    // Antes do LEAVE: rejeitado, o dono local ainda parece saudavel.
+    expect(reduce(linked, snapshotFromB).state.ownerPeerId).toBe('owner')
+
+    const afterLeave = reduce(linked, {
+      kind: 'MESSAGE',
+      from: 'owner',
+      now: 100,
+      message: { type: 'LEAVE', payload: {} }
+    })
+    expect(afterLeave.state.peerLinks['owner']?.status).toBe('timeout')
+
+    const adopted = reduce(afterLeave.state, snapshotFromB)
+    expect(adopted.state.ownerPeerId).toBe('b')
+    expect(adopted.state.members.map((entry) => entry.peerId).sort()).toEqual(['b', 'me'])
   })
 
   it('LEAVE recebido por membro comum apenas fecha a conexao (som vem do dono)', () => {
