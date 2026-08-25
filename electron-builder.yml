@@ -16,10 +16,13 @@ files:
   - '!node_modules/zoi-audio-capture/build/Release/*.{exp,iobj,ipdb,lib,pdb}'
   - '!node_modules/zoi-audio-capture/build/*.{sln,vcxproj,filters,gypi}'
 
-# O binario nativo de captura de audio nao carrega de dentro do asar: precisa
-# ficar desempacotado em app.asar.unpacked.
+# Nao dependem do asar:
+#   - o binario nativo (.node) nao carrega de dentro do asar;
+#   - o script do utilityProcess de audio e aberto por caminho de arquivo pelo
+#     `utilityProcess.fork`, entao precisa existir de verdade no disco.
 asarUnpack:
   - '**/*.node'
+  - out/main/audio-capture-worker.js
 
 # A pasta audios/ da raiz NAO e empacotada: os 7 sons ja entram no bundle do
 # renderer como assets do Vite (src/renderer/src/assets/audios).

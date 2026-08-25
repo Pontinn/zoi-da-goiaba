@@ -6,7 +6,7 @@
 // sozinho). A cascata e: process-exclusion -> process-exclusion (uma retentativa)
 // -> endpoint-loopback -> falha explicita.
 import { release } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import {
   MessageChannelMain,
   utilityProcess,
@@ -126,10 +126,23 @@ function handshake(worker: UtilityProcess, mode: CaptureMode): boolean {
   return true
 }
 
+/**
+ * Caminho do script do worker. No app empacotado ele fica em
+ * `app.asar.unpacked` (ver `asarUnpack` do electron-builder): o
+ * `utilityProcess.fork` abre um caminho de ARQUIVO, e depender do asar aqui
+ * seria apostar num comportamento nao documentado.
+ */
+function workerScriptPath(): string {
+  return join(__dirname, 'audio-capture-worker.js').replace(
+    `${sep}app.asar${sep}`,
+    `${sep}app.asar.unpacked${sep}`
+  )
+}
+
 function spawnWorker(mode: CaptureMode, restarts: number): ExclusionSession | null {
   let worker: UtilityProcess
   try {
-    worker = utilityProcess.fork(join(__dirname, 'audio-capture-worker.js'), [], {
+    worker = utilityProcess.fork(workerScriptPath(), [], {
       serviceName: 'zoi-audio-capture',
       stdio: 'inherit',
       env: workerEnv()
