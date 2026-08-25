@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CALL_METADATA_WAIT_MS, MEDIA_STALL_TIMEOUT_MS } from '@shared/config'
 import type { MediaConnection } from 'peerjs'
 import { createInitialState, type RoomState } from '@renderer/core/room-state'
-import { MediaManager } from '@renderer/services/media-manager'
+import { createDummyStream, MediaManager } from '@renderer/services/media-manager'
 import type { Session } from '@renderer/services/session'
 
 type Handler = (arg: never) => void
@@ -166,10 +166,13 @@ function call(manager: MediaManager, fake: FakeCall): void {
 
 // --- fallback de direcao da midia (chamada reversa) ------------------------
 
+type TrackKind = 'video' | 'audio'
+
 /** Track de saida: o que interessa e se ela foi PARADA no cleanup. */
 class FakeOutTrack {
   stopped = false
-  readonly kind = 'video'
+
+  constructor(readonly kind: TrackKind) {}
 
   stop(): void {
     this.stopped = true
@@ -177,14 +180,22 @@ class FakeOutTrack {
 }
 
 class FakeOutStream {
-  readonly tracks = [new FakeOutTrack()]
+  readonly tracks: FakeOutTrack[]
+
+  constructor(kinds: TrackKind[] = ['video']) {
+    this.tracks = kinds.map((kind) => new FakeOutTrack(kind))
+  }
 
   getTracks(): FakeOutTrack[] {
     return this.tracks
   }
 
   getVideoTracks(): FakeOutTrack[] {
-    return this.tracks
+    return this.tracks.filter((track) => track.kind === 'video')
+  }
+
+  getAudioTracks(): FakeOutTrack[] {
+    return this.tracks.filter((track) => track.kind === 'audio')
   }
 }
 
@@ -213,14 +224,20 @@ function dialingSession(getState: () => RoomState, dialed: OutgoingRecord[]): Se
 function pullingManager(
   state: RoomState,
   dialed: OutgoingRecord[]
-): { manager: MediaManager; dummies: FakeOutStream[] } {
+): { manager: MediaManager; dummies: FakeOutStream[]; released: FakeOutStream[] } {
   const dummies: FakeOutStream[] = []
-  const manager = new MediaManager(dialingSession(() => state, dialed), () => {
-    const dummy = new FakeOutStream()
-    dummies.push(dummy)
-    return dummy as unknown as MediaStream
-  })
-  return { manager, dummies }
+  const released: FakeOutStream[] = []
+  const manager = new MediaManager(
+    dialingSession(() => state, dialed),
+    () => {
+      // A ficticia da reversa vai com video E audio mudo (senao a resposta do
+      // transmissor perde a faixa de audio).
+      const dummy = new FakeOutStream(['video', 'audio'])
+      dummies.push(dummy)
+      return { stream: dummy as unknown as MediaStream, release: () => released.push(dummy) }
+    }
+  )
+  return { manager, dummies, released }
 }
 
 /** Estado em que quem roda o teste ("me") e o TRANSMISSOR de tx9. */
@@ -490,27 +507,42 @@ describe('media-manager / espectador puxa a midia quando a chamada falha', () =>
     manager.teardown()
   })
 
-  it('a stream ficticia da reversa e parada no cleanup, sem timer pendurado', () => {
+  it('a reversa e discada com video E audio, senao a resposta perde o som', () => {
     const dialed: OutgoingRecord[] = []
     const { manager, dummies } = pullingManager(stateWithTransmission(), dialed)
     stalled(manager)
 
+    expect(dialed[0]?.stream).toBe(dummies[0])
+    expect(dummies[0]?.getVideoTracks()).toHaveLength(1)
+    expect(dummies[0]?.getAudioTracks()).toHaveLength(1)
+    manager.teardown()
+  })
+
+  it('a stream ficticia da reversa e solta no cleanup, sem timer pendurado', () => {
+    const dialed: OutgoingRecord[] = []
+    const { manager, dummies, released } = pullingManager(stateWithTransmission(), dialed)
+    stalled(manager)
+
     expect(dummies).toHaveLength(1)
-    expect(dummies[0]?.tracks[0]?.stopped).toBe(false)
+    expect(dummies[0]?.tracks.some((track) => track.stopped)).toBe(false)
+    expect(released).toEqual([])
 
     manager.teardown()
-    expect(dummies[0]?.tracks[0]?.stopped).toBe(true)
+    expect(dummies[0]?.tracks.every((track) => track.stopped)).toBe(true)
+    // O AudioContext da faixa muda tem que fechar junto.
+    expect(released).toEqual([dummies[0]])
     expect(dialed[0]?.call.closed).toBe(true)
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('a transmissao saindo do estado tambem para a stream ficticia', () => {
+  it('a transmissao saindo do estado tambem solta a stream ficticia', () => {
     const dialed: OutgoingRecord[] = []
-    const { manager, dummies } = pullingManager(stateWithTransmission(), dialed)
+    const { manager, dummies, released } = pullingManager(stateWithTransmission(), dialed)
     stalled(manager)
 
     manager.dropRemote('tx1')
-    expect(dummies[0]?.tracks[0]?.stopped).toBe(true)
+    expect(dummies[0]?.tracks.every((track) => track.stopped)).toBe(true)
+    expect(released).toEqual([dummies[0]])
     expect(manager.getMediaFailures().size).toBe(0)
     manager.teardown()
   })
@@ -545,19 +577,22 @@ describe('media-manager / transmissor respondendo a chamada reversa', () => {
   })
 
   /** Transmissao local ativa de "me" com uma chamada em andamento para o dono. */
-  function transmitting(dialed: OutgoingRecord[]): {
+  function transmitting(
+    dialed: OutgoingRecord[],
+    kinds: TrackKind[] = ['video']
+  ): {
     manager: MediaManager
     stream: FakeOutStream
   } {
     const { manager } = pullingManager(stateTransmittingLocally(), dialed)
-    const stream = new FakeOutStream()
+    const stream = new FakeOutStream(kinds)
     ;(manager as unknown as { local: unknown }).local = {
       txId: 'tx9',
       presetId: 'p720_30',
       sourceId: 'screen:0',
       sourceLabel: 'Tela 1',
       sourceKind: 'screen',
-      hasAudio: false,
+      hasAudio: kinds.includes('audio'),
       stream
     }
     // Chamada normal (a que falha no campo) para o espectador.
@@ -585,6 +620,33 @@ describe('media-manager / transmissor respondendo a chamada reversa', () => {
 
     manager.teardown()
     expect(pull.closed).toBe(true)
+  })
+
+  it('responde a reversa com video E audio quando a transmissao tem som', () => {
+    const dialed: OutgoingRecord[] = []
+    const { manager, stream } = transmitting(dialed, ['video', 'audio'])
+
+    const pull = new FakeCall('dono', { txId: 'tx9', pull: true }, new FakePeerConnection())
+    call(manager, pull)
+
+    expect(pull.answered).toBe(true)
+    expect(pull.answeredWith).toBe(stream)
+    expect(stream.getAudioTracks()).toHaveLength(1)
+    manager.teardown()
+  })
+
+  it('responde a reversa so com video quando a transmissao nao tem som', () => {
+    const dialed: OutgoingRecord[] = []
+    const { manager, stream } = transmitting(dialed, ['video'])
+
+    const pull = new FakeCall('dono', { txId: 'tx9', pull: true }, new FakePeerConnection())
+    call(manager, pull)
+
+    expect(pull.answered).toBe(true)
+    expect(pull.answeredWith).toBe(stream)
+    expect(stream.getAudioTracks()).toEqual([])
+    expect(pull.closed).toBe(false)
+    manager.teardown()
   })
 
   it('ignora reversa de quem nao esta no roster', () => {
@@ -621,5 +683,129 @@ describe('media-manager / transmissor respondendo a chamada reversa', () => {
     expect(pull.answered).toBe(false)
     expect(pull.closed).toBe(true)
     manager.teardown()
+  })
+})
+
+// --- a stream ficticia de verdade (canvas + audio mudo) -------------------
+// O ambiente do vitest e node: nao existe `document` nem `AudioContext`, entao
+// os dois entram como stub, no mesmo espirito das outras falsificacoes.
+
+class FakeCanvasTrack {
+  stopped = false
+
+  constructor(readonly kind: TrackKind) {}
+
+  stop(): void {
+    this.stopped = true
+  }
+}
+
+class FakeCanvasStream {
+  readonly tracks: FakeCanvasTrack[] = [new FakeCanvasTrack('video')]
+
+  getTracks(): FakeCanvasTrack[] {
+    return this.tracks
+  }
+
+  getVideoTracks(): FakeCanvasTrack[] {
+    return this.tracks.filter((track) => track.kind === 'video')
+  }
+
+  getAudioTracks(): FakeCanvasTrack[] {
+    return this.tracks.filter((track) => track.kind === 'audio')
+  }
+
+  addTrack(track: FakeCanvasTrack): void {
+    this.tracks.push(track)
+  }
+}
+
+class FakeAudioContext {
+  static readonly instances: FakeAudioContext[] = []
+  closed = false
+
+  constructor() {
+    FakeAudioContext.instances.push(this)
+  }
+
+  createMediaStreamDestination(): { stream: FakeCanvasStream } {
+    const stream = new FakeCanvasStream()
+    stream.tracks.length = 0
+    stream.addTrack(new FakeCanvasTrack('audio'))
+    return { stream }
+  }
+
+  close(): Promise<void> {
+    this.closed = true
+    return Promise.resolve()
+  }
+}
+
+function stubCanvasDocument(): void {
+  vi.stubGlobal('document', {
+    createElement: () => ({
+      width: 0,
+      height: 0,
+      getContext: () => ({ fillStyle: '', fillRect: () => {} }),
+      captureStream: () => new FakeCanvasStream()
+    })
+  })
+}
+
+describe('media-manager / stream ficticia da chamada reversa', () => {
+  beforeEach(() => {
+    FakeAudioContext.instances.length = 0
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stubCanvasDocument()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('leva video e uma faixa de audio muda', () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    const pull = createDummyStream()
+    if (!pull) throw new Error('a stream ficticia deveria existir')
+
+    const stream = pull.stream as unknown as FakeCanvasStream
+    expect(stream.getVideoTracks()).toHaveLength(1)
+    expect(stream.getAudioTracks()).toHaveLength(1)
+    expect(FakeAudioContext.instances).toHaveLength(1)
+  })
+
+  it('o release fecha o AudioContext da faixa muda', () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    const pull = createDummyStream()
+    if (!pull) throw new Error('a stream ficticia deveria existir')
+
+    expect(FakeAudioContext.instances[0]?.closed).toBe(false)
+    pull.release()
+    expect(FakeAudioContext.instances[0]?.closed).toBe(true)
+  })
+
+  it('audio que nao pode ser criado degrada para video-only sem quebrar', () => {
+    class BrokenAudioContext {
+      constructor() {
+        throw new Error('sem dispositivo de audio')
+      }
+    }
+    vi.stubGlobal('AudioContext', BrokenAudioContext)
+
+    const pull = createDummyStream()
+    if (!pull) throw new Error('a pull sem audio ainda tem que valer')
+
+    const stream = pull.stream as unknown as FakeCanvasStream
+    expect(stream.getVideoTracks()).toHaveLength(1)
+    expect(stream.getAudioTracks()).toEqual([])
+    expect(() => pull.release()).not.toThrow()
+    expect(console.warn).toHaveBeenCalled()
+  })
+
+  it('sem document nenhum nao ha stream ficticia', () => {
+    vi.stubGlobal('document', undefined)
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    expect(createDummyStream()).toBeNull()
   })
 })

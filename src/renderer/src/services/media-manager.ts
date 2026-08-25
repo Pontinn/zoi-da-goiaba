@@ -54,10 +54,18 @@ interface PendingCall {
   receivedAt: number
 }
 
+/** Stream ficticia da chamada reversa + o que ela precisa soltar no fim. */
+export interface PullStream {
+  stream: MediaStream
+  /** Fecha o AudioContext da faixa muda (as tracks sao paradas a parte). */
+  release: () => void
+}
+
 /** Chamada REVERSA aberta pelo espectador + a stream ficticia que ela exige. */
 interface PullCall {
   call: MediaConnection
   stream: MediaStream
+  release: () => void
 }
 
 function stopTracks(stream: MediaStream): void {
@@ -65,11 +73,40 @@ function stopTracks(stream: MediaStream): void {
 }
 
 /**
+ * Faixa de audio MUDA para a stream ficticia. Sem ela a oferta do espectador sai
+ * so com m-line de video: o transmissor responde com video+audio, o audio nao
+ * acha transceiver e some sem aviso (o PeerJS nao renegocia). Um destino de
+ * MediaStream SEM nenhuma fonte ligada nao processa nada, entao o custo e
+ * praticamente zero (pilar de performance).
+ */
+function attachSilentAudio(stream: MediaStream): () => void {
+  try {
+    const audioContext = new AudioContext()
+    const track = audioContext.createMediaStreamDestination().stream.getAudioTracks()[0]
+    if (!track) {
+      void audioContext.close()
+      return () => {}
+    }
+    stream.addTrack(track)
+    return () => {
+      audioContext.close().catch((error: unknown) => {
+        console.warn('[media] falha ao fechar o audio da chamada reversa:', error)
+      })
+    }
+  } catch (error) {
+    // Degrada para video-only: a chamada reversa continua valendo, mas sem som.
+    console.warn('[media] sem faixa de audio muda na chamada reversa; ela vai sem som:', error)
+    return () => {}
+  }
+}
+
+/**
  * Stream exigida pelo PeerJS no `call`. O espectador nao tem nada para enviar,
  * entao vai um canvas 2x2 com `captureStream(0)`: sem timer por quadro, sem
- * captura de nada e custo praticamente zero (pilar de performance).
+ * captura de nada e custo praticamente zero (pilar de performance). Junto vai
+ * uma faixa de audio muda, para que a resposta do transmissor caiba inteira.
  */
-export function createDummyStream(): MediaStream | null {
+export function createDummyStream(): PullStream | null {
   try {
     if (typeof document === 'undefined') return null
     const canvas = document.createElement('canvas')
@@ -81,7 +118,8 @@ export function createDummyStream(): MediaStream | null {
       context.fillRect(0, 0, canvas.width, canvas.height)
     }
     const stream = canvas.captureStream(0)
-    return stream.getTracks().length > 0 ? stream : null
+    if (stream.getTracks().length === 0) return null
+    return { stream, release: attachSilentAudio(stream) }
   } catch (error) {
     console.warn('[media] nao foi possivel criar a stream ficticia da chamada reversa:', error)
     return null
@@ -134,8 +172,8 @@ export class MediaManager implements MediaHooks {
 
   constructor(
     private readonly session: Session,
-    /** Injetavel nos testes: o canvas so existe no renderer. */
-    private readonly createPullStream: () => MediaStream | null = createDummyStream
+    /** Injetavel nos testes: o canvas e o AudioContext so existem no renderer. */
+    private readonly createPullStream: () => PullStream | null = createDummyStream
   ) {}
 
   // --- consulta ------------------------------------------------------------
@@ -506,17 +544,18 @@ export class MediaManager implements MediaHooks {
 
     let call: MediaConnection
     try {
-      call = this.session.callPeer(txPeerId, dummy, { txId, pull: true })
+      call = this.session.callPeer(txPeerId, dummy.stream, { txId, pull: true })
     } catch (error) {
       console.warn(`[media] nao foi possivel puxar a transmissao ${txId}:`, error)
-      stopTracks(dummy)
+      stopTracks(dummy.stream)
+      dummy.release()
       return
     }
 
     console.info(`[media] a chamada de ${txPeerId} nao chegou; puxando ${txId} na outra direcao`)
     this.closePull(txId)
     this.detachIncoming(txId)
-    this.pullCalls.set(txId, { call, stream: dummy })
+    this.pullCalls.set(txId, { call, stream: dummy.stream, release: dummy.release })
     this.bindIncoming(call, txId, `media-pull-out:${shortPeerId(txPeerId)}`)
   }
 
@@ -540,6 +579,9 @@ export class MediaManager implements MediaHooks {
       call,
       disposeIce: observePeerJsIce(call, `media-pull-in:${shortPeerId(peerId)}`)
     })
+    // A oferta da reversa tem m-line de video E de audio: vai a transmissao
+    // inteira. Sem audio na captura (hasAudio false) o m-line de audio fica
+    // vazio e a chamada segue so com video, como antes.
     call.answer(transmission.stream)
     call.on('close', () => {
       if (this.outgoingCalls.get(peerId)?.call === call) this.closeOutgoing(peerId)
@@ -550,12 +592,13 @@ export class MediaManager implements MediaHooks {
     this.applySenderParameters(call, transmission.presetId)
   }
 
-  /** Encerra a chamada reversa de um txId e para as tracks ficticias dela. */
+  /** Encerra a chamada reversa de um txId e solta a stream ficticia dela. */
   private closePull(txId: string): void {
     const pull = this.pullCalls.get(txId)
     if (!pull) return
     this.pullCalls.delete(txId)
     stopTracks(pull.stream)
+    pull.release()
     pull.call.close()
   }
 
