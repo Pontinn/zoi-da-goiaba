@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PRESET_LIST } from '@shared/presets'
 import {
   createEnvelope,
   isEnvelope,
@@ -100,6 +101,29 @@ describe('protocol / validateEnvelope (base da matriz 5c)', () => {
     }
   })
 
+  /*
+   * Documenta a compatibilidade so-pra-frente dos presets: quem nao conhece o id
+   * descarta o TX_START inteiro como `invalid_payload`. E o que um cliente antigo
+   * faz ao receber `p1080_30_hq` / `p1080_60_hq`.
+   */
+  it('TX_START com preset desconhecido vira invalid_payload', () => {
+    const raw = {
+      v: 1,
+      type: 'TX_START',
+      from: 'p1',
+      ts: 1,
+      payload: {
+        txId: 't1',
+        presetId: 'p1080_30_hq_do_futuro',
+        hasAudio: true,
+        sourceKind: 'screen',
+        sourceLabel: 'Tela 1',
+        startedAt: 1
+      }
+    }
+    expect(validateEnvelope(raw, 'p1')).toEqual({ ok: false, reason: 'invalid_payload' })
+  })
+
   it('aceita payloads validos de todos os tipos do mesh', () => {
     const valid: Array<[string, unknown]> = [
       ['HELLO', { nickname: 'a', joinedAt: 1 }],
@@ -165,7 +189,7 @@ describe('protocol / type guards de entidades', () => {
     )
   })
 
-  it('isTxStartPayload aceita apenas os 3 presets da SPEC', () => {
+  it('isTxStartPayload aceita exatamente os presets do seletor', () => {
     const base = {
       txId: 't',
       hasAudio: true,
@@ -173,9 +197,23 @@ describe('protocol / type guards de entidades', () => {
       sourceLabel: 'Tela 1',
       startedAt: 1
     }
-    expect(isTxStartPayload({ ...base, presetId: 'p720_30' })).toBe(true)
-    expect(isTxStartPayload({ ...base, presetId: 'p1080_30' })).toBe(true)
-    expect(isTxStartPayload({ ...base, presetId: 'p1080_60' })).toBe(true)
+    for (const preset of PRESET_LIST) {
+      expect(isTxStartPayload({ ...base, presetId: preset.id }), preset.id).toBe(true)
+    }
     expect(isTxStartPayload({ ...base, presetId: 'p1440_144' })).toBe(false)
+    // Um id "quase certo" tambem cai: a lista e fechada, nao um prefixo.
+    expect(isTxStartPayload({ ...base, presetId: 'p1080_30_ultra' })).toBe(false)
+  })
+
+  it('presets de alta qualidade passam pela validacao do TX_START', () => {
+    const base = {
+      txId: 't',
+      hasAudio: true,
+      sourceKind: 'screen',
+      sourceLabel: 'Tela 1',
+      startedAt: 1
+    }
+    expect(isTxStartPayload({ ...base, presetId: 'p1080_30_hq' })).toBe(true)
+    expect(isTxStartPayload({ ...base, presetId: 'p1080_60_hq' })).toBe(true)
   })
 })

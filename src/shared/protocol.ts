@@ -54,7 +54,12 @@ export interface RoomMeta {
   createdAt: number
 }
 
-export type PresetId = 'p720_30' | 'p1080_30' | 'p1080_60'
+/**
+ * Os ids sao parte do PROTOCOLO: `isTxStartPayload` so aceita os desta lista.
+ * Adicionar um preset novo e uma mudanca so-pra-frente: cliente antigo descarta
+ * o TX_START com id que ele nao conhece (ver notas da release).
+ */
+export type PresetId = 'p720_30' | 'p1080_30' | 'p1080_30_hq' | 'p1080_60' | 'p1080_60_hq'
 export type SourceKind = 'screen' | 'window'
 export type QualityLevel = 'good' | 'medium' | 'bad'
 export type RosterChangeKind =
@@ -205,7 +210,13 @@ function isOneOf<T extends string>(value: unknown, options: readonly T[]): value
   return typeof value === 'string' && (options as readonly string[]).includes(value)
 }
 
-const PRESET_IDS: readonly PresetId[] = ['p720_30', 'p1080_30', 'p1080_60']
+const PRESET_IDS: readonly PresetId[] = [
+  'p720_30',
+  'p1080_30',
+  'p1080_30_hq',
+  'p1080_60',
+  'p1080_60_hq'
+]
 const SOURCE_KINDS: readonly SourceKind[] = ['screen', 'window']
 const QUALITY_LEVELS: readonly QualityLevel[] = ['good', 'medium', 'bad']
 const ROSTER_CHANGE_KINDS: readonly RosterChangeKind[] = [

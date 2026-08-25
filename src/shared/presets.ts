@@ -31,6 +31,16 @@ export const PRESETS: Record<PresetId, QualityPreset> = {
     frameRate: 30,
     maxBitrate: 4_000_000
   },
+  // Presets "alta": mesmo tamanho e fps do irmao normal, so com teto de bitrate
+  // maior para quem tem upload sobrando. Continuam sendo TETO (RF-47).
+  p1080_30_hq: {
+    id: 'p1080_30_hq',
+    label: '1080p30 alta',
+    width: 1920,
+    height: 1080,
+    frameRate: 30,
+    maxBitrate: 8_000_000
+  },
   p1080_60: {
     id: 'p1080_60',
     label: '1080p60',
@@ -38,13 +48,23 @@ export const PRESETS: Record<PresetId, QualityPreset> = {
     height: 1080,
     frameRate: 60,
     maxBitrate: 6_000_000
+  },
+  p1080_60_hq: {
+    id: 'p1080_60_hq',
+    label: '1080p60 alta',
+    width: 1920,
+    height: 1080,
+    frameRate: 60,
+    maxBitrate: 12_000_000
   }
 }
 
 export const PRESET_LIST: readonly QualityPreset[] = [
   PRESETS.p720_30,
   PRESETS.p1080_30,
-  PRESETS.p1080_60
+  PRESETS.p1080_30_hq,
+  PRESETS.p1080_60,
+  PRESETS.p1080_60_hq
 ]
 
 export const DEFAULT_PRESET_ID: PresetId = 'p1080_30'

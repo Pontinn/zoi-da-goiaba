@@ -535,6 +535,19 @@
 }
 
 /*
+ * Com 5 presets a fileira de qualidade fica longa. O `wrap` aqui garante que
+ * ela quebre em vez de espremer os rotulos quando a janela esta no minimo.
+ */
+.z-picker__options .z-row-between {
+  flex-wrap: wrap;
+}
+
+.z-picker__options .z-seg {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/*
  * A linha inteira e um <button>, entao SEM `background`/`border`/`color`
  * explicitos ela herdava o estilo padrao do sistema (fundo quase branco,
  * ButtonFace) e destoava do modal escuro. A superficie segue os mesmos tokens

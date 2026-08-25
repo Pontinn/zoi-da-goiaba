@@ -196,7 +196,8 @@ function PickerBody({
           </span>
           <span>
             Quanto maior a qualidade, mais upload sua conexao precisa: com a sala cheia, prefira
-            720p30.
+            720p30. As opcoes &quot;alta&quot; sobem o teto de bitrate e so valem a pena com internet
+            folgada dos dois lados.
           </span>
         </div>
       </div>

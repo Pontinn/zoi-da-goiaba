@@ -197,9 +197,18 @@ export function participantCard(instance: ZoiInstance, nickname: string): Locato
   return instance.page.getByTestId('participant').filter({ hasText: nickname })
 }
 
+/** Mesma ordem de PRESET_LIST; duplicado aqui porque o e2e nao importa @shared. */
+const PRESET_TESTIDS = [
+  'p720_30',
+  'p1080_30',
+  'p1080_30_hq',
+  'p1080_60',
+  'p1080_60_hq'
+] as const
+
 export interface TransmitOptions {
   /** Preset da SPEC; o padrao usa o mais leve para nao pesar na maquina do teste. */
-  presetId?: 'p720_30' | 'p1080_30' | 'p1080_60'
+  presetId?: 'p720_30' | 'p1080_30' | 'p1080_30_hq' | 'p1080_60' | 'p1080_60_hq'
   /**
    * O toggle nasce ligado (RNF-10). O smoke desliga por padrao: loopback de
    * audio depende de dispositivo de saida ativo na maquina e ja foi validado no
@@ -228,6 +237,11 @@ export async function startTransmission(
     await audioToggle.click()
   }
   await expect(audioToggle).toHaveAttribute('aria-checked', String(withAudio))
+
+  // O seletor mostra os 5 presets e cabe na janela sem cortar rotulo.
+  for (const id of PRESET_TESTIDS) {
+    await expect(page.getByTestId(`preset-${id}`)).toBeVisible()
+  }
 
   await page.getByTestId(`preset-${presetId}`).click()
   await pace()
