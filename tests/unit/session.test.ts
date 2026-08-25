@@ -56,9 +56,14 @@ function acceptPayload(): JoinAcceptPayload {
   }
 }
 
-function makeSession(): { session: Session; doors: FakeConnection[] } {
+function makeSession(): {
+  session: Session
+  doors: FakeConnection[]
+  members: Map<string, FakeConnection>
+} {
   const session = new Session()
   const doors: FakeConnection[] = []
+  const members = new Map<string, FakeConnection>()
   const peerManager = {
     memberPeerId: SELF,
     hasDoor: false,
@@ -68,7 +73,11 @@ function makeSession(): { session: Session; doors: FakeConnection[] } {
       doors.push(connection)
       return connection
     },
-    connectToMember: (peerId: string) => new FakeConnection(peerId),
+    connectToMember: (peerId: string) => {
+      const connection = new FakeConnection(peerId)
+      members.set(peerId, connection)
+      return connection
+    },
     openDoor: () => Promise.resolve(),
     closeDoor: () => {},
     call: () => {
@@ -78,7 +87,7 @@ function makeSession(): { session: Session; doors: FakeConnection[] } {
   }
   ;(session as unknown as { peerManager: unknown }).peerManager = peerManager
   session.setIdentity('Eu', 'i-me')
-  return { session, doors }
+  return { session, doors, members }
 }
 
 describe('session / respostas do door no ingresso', () => {
@@ -123,6 +132,56 @@ describe('session / respostas do door no ingresso', () => {
     session.teardown()
   })
 
+  it('JOIN_ACCEPT assinado por outro peer que nao o door e ignorado (5c)', async () => {
+    const { session, doors } = makeSession()
+    const promise = session.joinRoom(CODE)
+    // O canal abriu, entao a desistencia final e a de "door nao respondeu".
+    const assertion = expect(promise).rejects.toThrowError('Sem resposta da sala.')
+    await vi.advanceTimersByTimeAsync(1)
+
+    doors[0]?.emit('open')
+    // Envelope perfeito, so que assinado pelo member peer do dono: o candidato
+    // valida contra o peerId do DOOR ao qual ELE se conectou.
+    doors[0]?.emit('data', createEnvelope('JOIN_ACCEPT', acceptPayload(), 'dono', 0))
+    await vi.advanceTimersByTimeAsync(50)
+    expect(session.getState().phase).toBe('idle')
+
+    // O canal foi para o timeout como se nada tivesse chegado.
+    await vi.advanceTimersByTimeAsync(JOIN_RESPONSE_TIMEOUT_MS + 100)
+    doors[1]?.emit('open')
+    await vi.advanceTimersByTimeAsync(JOIN_RESPONSE_TIMEOUT_MS + 100)
+    await assertion
+    session.teardown()
+  })
+
+  it('JOIN_REJECT do door vira o erro com a mensagem da razao (RF-33)', async () => {
+    const { session, doors } = makeSession()
+    const promise = session.joinRoom(CODE)
+    const assertion = expect(promise).rejects.toThrowError('Voce esta banido desta sala.')
+    await vi.advanceTimersByTimeAsync(1)
+
+    doors[0]?.emit('open')
+    doors[0]?.emit('data', createEnvelope('JOIN_REJECT', { reason: 'banned' }, DOOR_ID, 0))
+    await assertion
+    // Recusa e definitiva: nao existe segunda tentativa.
+    expect(doors).toHaveLength(1)
+    session.teardown()
+  })
+
+  it('JOIN_REJECT forjado por outro peer nao derruba o ingresso (5c)', async () => {
+    const { session, doors } = makeSession()
+    const promise = session.joinRoom(CODE)
+    await vi.advanceTimersByTimeAsync(1)
+
+    doors[0]?.emit('open')
+    doors[0]?.emit('data', createEnvelope('JOIN_REJECT', { reason: 'banned' }, 'intruso', 0))
+    doors[0]?.emit('data', createEnvelope('JOIN_ACCEPT', acceptPayload(), DOOR_ID, 0))
+    await promise
+
+    expect(session.getState().phase).toBe('active')
+    session.teardown()
+  })
+
   it('sem segunda resposta a mensagem final e "Sem resposta da sala."', async () => {
     const { session, doors } = makeSession()
     const promise = session.joinRoom(CODE)
@@ -136,6 +195,84 @@ describe('session / respostas do door no ingresso', () => {
 
     await assertion
     expect(doors).toHaveLength(2)
+    session.teardown()
+  })
+})
+
+describe('session / heartbeat PING-PONG (matriz 5c)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Sala ativa com o dono no mesh e o canal com ele aberto. */
+  async function activeSession(): Promise<{
+    session: Session
+    owner: FakeConnection
+  }> {
+    const { session, doors, members } = makeSession()
+    const promise = session.joinRoom(CODE)
+    await vi.advanceTimersByTimeAsync(1)
+    doors[0]?.emit('open')
+    doors[0]?.emit('data', createEnvelope('JOIN_ACCEPT', acceptPayload(), DOOR_ID, 0))
+    await promise
+
+    const owner = members.get('dono')
+    if (!owner) throw new Error('a sessao deveria ter discado para o dono')
+    owner.open = true
+    owner.emit('open')
+    owner.sent.length = 0
+    return { session, owner }
+  }
+
+  it('PING de membro do roster e respondido com PONG ecoando o mesmo seq', async () => {
+    const { session, owner } = await activeSession()
+
+    owner.emit('data', createEnvelope('PING', { seq: 77 }, 'dono', 0))
+
+    expect(owner.sent).toEqual([
+      expect.objectContaining({ type: 'PONG', from: SELF, payload: { seq: 77 } })
+    ])
+    session.teardown()
+  })
+
+  it('PING de quem nao esta no roster nao e respondido', async () => {
+    const { session, owner } = await activeSession()
+
+    // 1. Conexao de fora da sala, com envelope internamente coerente.
+    const stranger = new FakeConnection('intruso')
+    ;(
+      session as unknown as { handleIncomingMeshConnection(connection: unknown): void }
+    ).handleIncomingMeshConnection(stranger)
+    stranger.open = true
+    stranger.emit('open')
+    stranger.sent.length = 0
+    stranger.emit('data', createEnvelope('PING', { seq: 1 }, 'intruso', 0))
+    expect(stranger.sent).toEqual([])
+
+    // 2. PING assinado por outro peer no canal do dono: o `from` tem que bater
+    // com o peerId REAL da conexao.
+    owner.emit('data', createEnvelope('PING', { seq: 2 }, 'intruso', 0))
+    expect(owner.sent).toEqual([])
+    session.teardown()
+  })
+
+  it('PONG com seq diferente do enviado nao vira amostra de RTT', async () => {
+    const { session, owner } = await activeSession()
+
+    // Heartbeat do proprio app: primeiro PING sai sozinho depois de 2s.
+    await vi.advanceTimersByTimeAsync(2_500)
+    const ping = owner.sent.find(
+      (payload): payload is { type: string; payload: { seq: number } } =>
+        typeof payload === 'object' && payload !== null && 'type' in payload
+    )
+    expect(ping).toMatchObject({ type: 'PING' })
+
+    owner.emit('data', createEnvelope('PONG', { seq: 999 }, 'dono', 0))
+    expect(session.getState().quality['dono']).toBeUndefined()
     session.teardown()
   })
 })

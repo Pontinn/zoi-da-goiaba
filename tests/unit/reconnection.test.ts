@@ -103,6 +103,40 @@ describe('reconnection / par que morreu vs par que nunca conectou', () => {
     manager.destroy()
   })
 
+  it('PONG so vira amostra de RTT quando ecoa o seq enviado (5c)', () => {
+    const { manager, pings, rtts } = harness()
+    manager.track('b')
+    manager.markOpen('b')
+
+    vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS + 100)
+    const sent = pings.at(-1)
+    expect(sent).toMatchObject({ peerId: 'b' })
+
+    // Eco errado: ignorado como amostra (o link segue vivo, sem RTT novo).
+    manager.handlePong('b', (sent?.seq ?? 0) + 500)
+    expect(rtts).toEqual([])
+
+    vi.advanceTimersByTime(120)
+    manager.handlePong('b', sent?.seq ?? 0)
+    expect(rtts).toHaveLength(1)
+    expect(rtts[0]?.peerId).toBe('b')
+    expect(rtts[0]?.rttMs).toBeGreaterThan(0)
+    manager.destroy()
+  })
+
+  it('PONG de par desconhecido e descartado sem efeito (5c)', () => {
+    const { manager, rtts } = harness()
+    manager.track('b')
+    manager.markOpen('b')
+
+    manager.handlePong('intruso', 1)
+
+    expect(rtts).toEqual([])
+    expect(manager.phaseOf('intruso')).toBeNull()
+    expect(manager.phaseOf('b')).toBe('up')
+    manager.destroy()
+  })
+
   it('sem PONG por 6s o link estabelecido entra sozinho na janela', () => {
     const { manager, reconnecting, pings } = harness()
     manager.track('b')
