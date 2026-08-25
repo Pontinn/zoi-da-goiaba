@@ -1,0 +1,43 @@
+appId: com.pontin.zoidagoiaba
+productName: Zói da Goiaba
+copyright: Pontin
+
+directories:
+  output: release
+  buildResources: build
+
+# node_modules de producao entram automaticamente (electron-updater precisa deles).
+files:
+  - out/**
+  - package.json
+
+# A pasta audios/ da raiz NAO e empacotada: os 7 sons ja entram no bundle do
+# renderer como assets do Vite (src/renderer/src/assets/audios).
+
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  executableName: ZoiDaGoiaba
+  artifactName: ZoiDaGoiaba-Setup.exe
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Zói da Goiaba
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  uninstallDisplayName: Zói da Goiaba
+  deleteAppDataOnUninstall: false
+
+# Fonte do auto-update. NENHUM passo do build publica: `npm run dist` roda
+# electron-builder com --publish never. A release e criada a mao pelo usuario.
+publish:
+  provider: github
+  owner: Pontinn
+  repo: screen-share
+  releaseType: release

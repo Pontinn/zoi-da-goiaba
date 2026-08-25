@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { app, shell, BrowserWindow } from 'electron'
 import { registerDisplayMediaHandler } from './capture'
 import { registerIpcHandlers } from './ipc-handlers'
+import { registerUpdaterIpc, startUpdater } from './updater'
 
 // Token --bg-app do UISPEC: pintar a janela antes do primeiro frame evita flash branco.
 const APP_BACKGROUND = '#0e0b12'
@@ -67,9 +68,12 @@ if (!gotTheLock) {
     app.setAppUserModelId('com.pontin.zoidagoiaba')
 
     registerIpcHandlers()
+    registerUpdaterIpc(() => mainWindow)
     registerDisplayMediaHandler()
 
     mainWindow = createWindow()
+    // Updater so entra em acao no app empacotado (RF-43).
+    mainWindow.once('ready-to-show', () => startUpdater())
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
