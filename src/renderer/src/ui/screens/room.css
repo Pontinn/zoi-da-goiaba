@@ -508,12 +508,34 @@
   margin-top: var(--space-4);
 }
 
+/*
+ * A linha inteira e um <button>, entao SEM `background`/`border`/`color`
+ * explicitos ela herdava o estilo padrao do sistema (fundo quase branco,
+ * ButtonFace) e destoava do modal escuro. A superficie segue os mesmos tokens
+ * do `.z-note` logo abaixo: elevada, borda de 1px e texto secundario.
+ */
 .z-switch {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-secondary-size);
+  text-align: left;
   cursor: pointer;
   user-select: none;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.z-switch:hover {
+  background: var(--bg-hover);
 }
 
 .z-switch__track {
