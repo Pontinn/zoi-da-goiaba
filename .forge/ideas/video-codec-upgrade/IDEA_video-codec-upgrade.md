@@ -17,6 +17,7 @@ A transmissao hoje negocia VP8 (default do PeerJS), o codec mais antigo e menos 
 - 2026-08-25: usuario decidiu que codec e FEATURE COMPLETA (pipeline forge normal), separada do quick de presets (hq-presets, ja feito). Motivo: mexe no coracao do caminho de midia recem estabilizado em campo (fallbacks de direcao, pull, watchdog) e tem matriz de risco real.
 - 2026-08-25: o modo "nitidez" vai DE CARONA nesta feature (toggle no transmissor: contentHint 'detail' + degradationPreference 'maintain-resolution', para leitura/codigo/imagem parada; hoje e fixo 'motion' + 'maintain-framerate').
 - 2026-08-25 (finalizacao com o usuario): TERA escape manual nas Configuracoes ("forcar modo compatibilidade/VP8"), persistido, como rede de seguranca se AV1/VP9 der problema em alguma maquina. Resolve P5.
+- 2026-08-25: OBJETIVO DUPLO confirmado na conversa com o usuario. Caso real do grupo: um amigo com notebook antigo/fraco TRAVA o video ao transmitir (CPU nao da conta de capturar+codificar VP8 em software). Notebooks Intel antigos costumam ter encoder de H264 em HARDWARE (QuickSync): a matriz de escolha deve incluir H264-hw como opcao para maquina fraca (fluidez), alem de AV1/VP9 para maquina forte (qualidade). "Reduzir travamento em maquina fraca ao transmitir" vira objetivo e criterio de aceitacao ao lado de "mais bonito no mesmo bitrate". CUIDADO ja registrado: AV1/VP9 em software em maquina fraca PIORA o travamento; a detecao por maquina e obrigatoria, nunca preferencia global fixa.
 
 ## 3. Escopo
 
