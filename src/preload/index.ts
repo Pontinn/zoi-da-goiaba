@@ -37,6 +37,15 @@ const api: ZoiApi = {
         ipcRenderer.removeListener(IPC.updateStatus, handler)
       }
     }
+  },
+  system: {
+    onResume: (listener: () => void): (() => void) => {
+      const handler = (): void => listener()
+      ipcRenderer.on(IPC.systemResume, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.systemResume, handler)
+      }
+    }
   }
 }
 

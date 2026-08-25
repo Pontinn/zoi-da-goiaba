@@ -3,7 +3,10 @@
 // LEITURA das respostas do door (origem, tipo, ausencia de resposta), nao o
 // PeerJS.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { JOIN_RESPONSE_TIMEOUT_MS } from '@shared/config'
+import {
+  JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS,
+  JOIN_RESPONSE_TIMEOUT_MS
+} from '@shared/config'
 import { createEnvelope, type JoinAcceptPayload } from '@shared/protocol'
 import { toPeerId } from '@renderer/core/room-code'
 import { Session } from '@renderer/services/session'
@@ -56,7 +59,15 @@ function acceptPayload(): JoinAcceptPayload {
   }
 }
 
-function makeSession(): {
+interface SessionOptions {
+  /**
+   * Simula o `peer-unavailable` que a sinalizacao emite quando o id procurado
+   * nao existe. E emitido a cada tentativa de ingresso, como faz o servidor.
+   */
+  unavailablePeerId?: string
+}
+
+function makeSession(options: SessionOptions = {}): {
   session: Session
   doors: FakeConnection[]
   members: Map<string, FakeConnection>
@@ -64,6 +75,14 @@ function makeSession(): {
   const session = new Session()
   const doors: FakeConnection[] = []
   const members = new Map<string, FakeConnection>()
+
+  const emitMemberError = (type: string, message: string): void => {
+    const listeners = (
+      session as unknown as { memberErrorListeners: Set<(t: string, m: string) => void> }
+    ).memberErrorListeners
+    for (const listener of [...listeners]) listener(type, message)
+  }
+
   const peerManager = {
     memberPeerId: SELF,
     hasDoor: false,
@@ -71,6 +90,16 @@ function makeSession(): {
     connectToDoor: () => {
       const connection = new FakeConnection(DOOR_ID)
       doors.push(connection)
+      if (options.unavailablePeerId !== undefined) {
+        setTimeout(
+          () =>
+            emitMemberError(
+              'peer-unavailable',
+              `Could not connect to peer ${options.unavailablePeerId}`
+            ),
+          1
+        )
+      }
       return connection
     },
     connectToMember: (peerId: string) => {
@@ -80,6 +109,10 @@ function makeSession(): {
     },
     openDoor: () => Promise.resolve(),
     closeDoor: () => {},
+    doorStatus: 'closed' as const,
+    startHealthChecks: () => {},
+    checkSignalingHealth: () => {},
+    debugDropSignaling: () => {},
     call: () => {
       throw new Error('nao usado')
     },
@@ -99,16 +132,37 @@ describe('session / respostas do door no ingresso', () => {
     vi.useRealTimers()
   })
 
-  it('canal que nunca abre vira "Sala nao encontrada." mesmo pela espera interna', async () => {
+  it('silencio da porta NAO e acusado como sala inexistente', async () => {
     const { session, doors } = makeSession()
+    const promise = session.joinRoom(CODE)
+    // Sem `peer-unavailable`, o id da sala EXISTE na sinalizacao: quem falhou
+    // foi a conexao entre as duas maquinas, e a mensagem precisa dizer isso.
+    const assertion = expect(promise).rejects.toThrowError('Achei a sala, mas a conexao')
+
+    await vi.advanceTimersByTimeAsync(JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS + 100)
+    await assertion
+    expect(doors[0]?.closed).toBe(true)
+    session.teardown()
+  })
+
+  it('`peer-unavailable` da porta vira "Sala nao encontrada."', async () => {
+    // O servidor responde, a cada tentativa, que o id da sala nao existe.
+    const { session } = makeSession({ unavailablePeerId: DOOR_ID })
     const promise = session.joinRoom(CODE)
     const assertion = expect(promise).rejects.toThrowError('Sala nao encontrada.')
 
-    // Sem `peer-unavailable` e sem `close`: so a espera interna responde.
-    await vi.advanceTimersByTimeAsync(JOIN_RESPONSE_TIMEOUT_MS + 100)
+    await vi.advanceTimersByTimeAsync(JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS + 2_000)
     await assertion
-    expect(doors).toHaveLength(1)
-    expect(doors[0]?.closed).toBe(true)
+    session.teardown()
+  })
+
+  it('`peer-unavailable` de OUTRO peer nao e confundido com a porta', async () => {
+    const { session } = makeSession({ unavailablePeerId: 'outro-par-qualquer' })
+    const promise = session.joinRoom(CODE)
+    const assertion = expect(promise).rejects.toThrowError('Achei a sala, mas a conexao')
+
+    await vi.advanceTimersByTimeAsync(JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS + 2_000)
+    await assertion
     session.teardown()
   })
 

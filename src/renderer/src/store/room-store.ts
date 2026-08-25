@@ -5,12 +5,14 @@ import { create } from 'zustand'
 import { QUALITY_STALE_MS, WATCHING_UPDATE_DEBOUNCE_MS } from '@shared/config'
 import { createInitialState, type RoomState } from '../core/room-state'
 import { mediaManager, type LocalTransmission } from '../services/media-manager'
-import { session } from '../services/session'
+import { session, type SessionHealth } from '../services/session'
 
 export interface RoomStore {
   room: RoomState
   streams: ReadonlyMap<string, MediaStream>
   localTx: LocalTransmission | null
+  /** Saude do transporte (sinalizacao e porta da sala), fora do RoomState. */
+  health: SessionHealth
   /** Tique lento so para reavaliar "sem dados" de qualidade (QUALITY_STALE_MS). */
   qualityTick: number
   /** Transmissao aberta no player. Muda na hora; o broadcast vai com debounce. */
@@ -21,6 +23,7 @@ export const useRoomStore = create<RoomStore>(() => ({
   room: createInitialState(),
   streams: new Map(),
   localTx: null,
+  health: session.getHealth(),
   qualityTick: 0,
   selectedTxId: null
 }))
@@ -57,6 +60,10 @@ export function attachRoomStore(): () => void {
     useRoomStore.setState({ streams, localTx: mediaManager.getLocalTransmission() })
   })
 
+  const unsubscribeHealth = session.onHealth((health) => {
+    useRoomStore.setState({ health })
+  })
+
   const tick = setInterval(() => {
     useRoomStore.setState((state) => ({ qualityTick: state.qualityTick + 1 }))
   }, QUALITY_STALE_MS / 2)
@@ -64,6 +71,7 @@ export function attachRoomStore(): () => void {
   return () => {
     unsubscribeSession()
     unsubscribeStreams()
+    unsubscribeHealth()
     clearInterval(tick)
   }
 }

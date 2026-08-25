@@ -9,7 +9,8 @@ export const IPC = {
   appGetVersion: 'app:get-version',
   updateCheck: 'update:check',
   updateInstall: 'update:install',
-  updateStatus: 'update:status'
+  updateStatus: 'update:status',
+  systemResume: 'system:resume'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -101,5 +102,13 @@ export interface ZoiApi {
     install(): Promise<void>
     /** Registra listener de `update:status`; retorna a funcao de descarte. */
     onStatus(listener: (status: UpdateStatus) => void): () => void
+  }
+  system: {
+    /**
+     * Maquina voltou de suspensao. O websocket da sinalizacao morre durante o
+     * sono sem avisar o renderer: acordar dispara verificacao imediata da porta
+     * da sala. Retorna a funcao de descarte.
+     */
+    onResume(listener: () => void): () => void
   }
 }

@@ -34,6 +34,7 @@ export function RoomScreen(): JSX.Element {
   const localTx = useRoomStore((state) => state.localTx)
   const qualityTick = useRoomStore((state) => state.qualityTick)
   const selectedTxId = useRoomStore((state) => state.selectedTxId)
+  const doorHealth = useRoomStore((state) => state.health.door)
   const setRoute = useAppStore((state) => state.setRoute)
   const pushToast = useAppStore((state) => state.pushToast)
 
@@ -45,6 +46,8 @@ export function RoomScreen(): JSX.Element {
 
   const iAmOwner = computeIsOwner(room)
   const code = room.roomMeta?.code ?? ''
+  // Porta fechada = ninguem novo entra, por mais saudavel que a sala pareca.
+  const doorClosed = iAmOwner && doorHealth !== 'open' && doorHealth !== 'closed'
   const transmissions = useMemo(() => Object.values(room.transmissions), [room.transmissions])
 
   /** peerId -> nickname de quem ele esta assistindo (RF-37/AC-21). */
@@ -151,6 +154,15 @@ export function RoomScreen(): JSX.Element {
           </IconButton>
         </span>
         {copied ? <span className="z-badge z-badge--success">codigo copiado</span> : null}
+        {doorClosed ? (
+          <span
+            className="z-badge z-badge--warning"
+            title="A sala continua funcionando para quem ja esta dentro, mas o codigo nao encontra a sala ate a porta voltar."
+            data-testid="door-warning"
+          >
+            reabrindo a porta da sala...
+          </span>
+        ) : null}
 
         <span className="z-room__spacer" />
 

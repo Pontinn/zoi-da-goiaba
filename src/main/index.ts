@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, shell, BrowserWindow } from 'electron'
+import { app, shell, powerMonitor, BrowserWindow } from 'electron'
+import { IPC } from '@shared/ipc'
 import { registerDisplayMediaHandler } from './capture'
 import { registerIpcHandlers } from './ipc-handlers'
 import { registerUpdaterIpc, startUpdater } from './updater'
@@ -56,7 +57,13 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      devTools: !app.isPackaged
+      devTools: !app.isPackaged,
+      // O dono costuma MINIMIZAR a janela enquanto espera os amigos entrarem, e
+      // e ai que o Chromium estrangula timers de janela em segundo plano. O
+      // heartbeat do PeerJS (5s) e a verificacao de saude da sala dependem
+      // desses timers: estrangulados, o servidor poda a conexao e o codigo da
+      // sala some da sinalizacao sem ninguem perceber.
+      backgroundThrottling: false
     }
   })
 
@@ -110,6 +117,12 @@ if (!gotTheLock) {
     mainWindow = createWindow()
     // Updater so entra em acao no app empacotado (RF-43).
     mainWindow.once('ready-to-show', () => startUpdater())
+
+    // Suspensao mata o websocket da sinalizacao sem avisar o renderer: ao voltar,
+    // o app reverifica o registro do member peer e da porta da sala.
+    powerMonitor.on('resume', () => {
+      mainWindow?.webContents.send(IPC.systemResume)
+    })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

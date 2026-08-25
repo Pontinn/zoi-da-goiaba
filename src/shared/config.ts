@@ -38,6 +38,22 @@ export const OWNER_REBROADCAST_COUNT = 3
 export const DOOR_REGISTER_RETRY_WINDOW_MS = 10_000
 export const DOOR_REGISTER_RETRY_INTERVAL_MS = 800
 
+/**
+ * Saude da sinalizacao (SPEC secao 2.7, item 1). O servidor publico do PeerJS
+ * derruba websockets ociosos e a maquina pode dormir: sem verificacao periodica,
+ * um door peer que perdeu o registro fica invisivel para sempre enquanto a sala
+ * local continua com cara de saudavel.
+ */
+export const SIGNALING_HEALTH_CHECK_INTERVAL_MS = 30_000
+/** Espera pelo `open` depois de um `peer.reconnect()`. */
+export const SIGNALING_RECONNECT_TIMEOUT_MS = 8_000
+/** Teto do backoff do ciclo de reconexao da sinalizacao. */
+export const SIGNALING_RECONNECT_MAX_BACKOFF_MS = 15_000
+/** Teto do backoff entre tentativas de recuperacao do door peer. */
+export const DOOR_RECOVERY_MAX_BACKOFF_MS = 15_000
+/** Tempo de porta fechada a partir do qual o dono precisa ser avisado. */
+export const DOOR_RECOVERY_WARN_AFTER_MS = 20_000
+
 /** Ingresso: tempo de espera da resposta do dono e retry de "sala nao encontrada". */
 export const JOIN_RESPONSE_TIMEOUT_MS = 10_000
 export const JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS = 10_000

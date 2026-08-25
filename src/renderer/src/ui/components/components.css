@@ -556,6 +556,11 @@
   color: var(--success);
 }
 
+.z-badge--warning {
+  background: #ffb22426;
+  color: var(--warning);
+}
+
 /* --- Portas da sala ------------------------------------------------------ */
 
 .z-doors {

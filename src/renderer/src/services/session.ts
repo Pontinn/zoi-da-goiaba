@@ -38,7 +38,12 @@ import {
   type ToastTone
 } from '../core/room-state'
 import { Mesh } from './mesh'
-import { PeerManager, RoomCodeUnavailableError, SignalingError } from './peer-manager'
+import {
+  PeerManager,
+  RoomCodeUnavailableError,
+  SignalingError,
+  type DoorHealth
+} from './peer-manager'
 import { ReconnectionManager } from './reconnection'
 import { StatsMonitor } from './stats-monitor'
 import { playSound } from './sound-player'
@@ -54,9 +59,24 @@ export class JoinRejectedError extends Error {
 }
 
 export class RoomNotFoundError extends Error {
-  constructor() {
-    super('Sala nao encontrada.')
+  constructor(message = 'Sala nao encontrada.') {
+    super(message)
     this.name = 'RoomNotFoundError'
+  }
+}
+
+/**
+ * O id da sala EXISTE na sinalizacao (o servidor nao respondeu `peer-unavailable`),
+ * mas o canal de ingresso nunca abriu: fica entre as duas maquinas (NAT/firewall,
+ * sem TURN por decisao do RF-42) ou o dono nao respondeu a tempo. Herda de
+ * `RoomNotFoundError` para nao mudar o tratamento de quem so quer saber que a
+ * entrada falhou; o que muda e a MENSAGEM, que antes acusava a sala de nao
+ * existir e mandava o usuario para o caminho errado de diagnostico.
+ */
+export class RoomUnreachableError extends RoomNotFoundError {
+  constructor() {
+    super('Achei a sala, mas a conexao nao completou. Pode ser a rede de um dos dois.')
+    this.name = 'RoomUnreachableError'
   }
 }
 
@@ -79,6 +99,20 @@ export interface Toast {
   tone: ToastTone
   text: string
 }
+
+/**
+ * Saude do TRANSPORTE, fora do RoomState de proposito: o reducer e puro e nao
+ * conhece websocket. A UI usa isto para nao mostrar uma sala "saudavel" enquanto
+ * a porta esta fechada (ninguem consegue entrar).
+ */
+export interface SessionHealth {
+  /** Sinalizacao do member peer (mesh e novos dials). */
+  signaling: 'up' | 'reconnecting'
+  /** Registro do door peer; so o dono tem porta. */
+  door: DoorHealth
+}
+
+type HealthListener = (health: SessionHealth) => void
 
 /** Ganchos que o pipeline de midia (Sprint 5) registra na sessao. */
 export interface MediaHooks {
@@ -106,6 +140,18 @@ export interface CreateRoomOptions {
 type StateListener = (state: RoomState) => void
 type ToastListener = (toast: Toast) => void
 
+/**
+ * Retomada do sistema depois de suspensao (powerMonitor no main). Ao dormir, o
+ * websocket morre sem que o evento chegue ao renderer: acordar precisa disparar
+ * uma verificacao imediata. Fora do Electron (testes) vira no-op, e a verificacao
+ * periodica continua cobrindo o caso.
+ */
+function onSystemResume(listener: () => void): (() => void) | null {
+  if (typeof window === 'undefined') return null
+  const api = (window as { zoi?: { system?: { onResume?(cb: () => void): () => void } } }).zoi
+  return api?.system?.onResume?.(listener) ?? null
+}
+
 const noopMediaHooks: MediaHooks = {
   onMemberJoined: () => {},
   onPeerRecovered: () => {},
@@ -124,8 +170,15 @@ export class Session {
 
   private readonly stateListeners = new Set<StateListener>()
   private readonly toastListeners = new Set<ToastListener>()
+  private readonly healthListeners = new Set<HealthListener>()
   private readonly memberErrorListeners = new Set<(type: string, message: string) => void>()
   private readonly rttByPeer = new Map<string, number>()
+
+  private health: SessionHealth = { signaling: 'up', door: 'closed' }
+  /** Ja avisamos que a porta esta fechada? Evita repetir o toast a cada ciclo. */
+  private doorWarned = false
+  /** Descarte do listener de retomada de suspensao (powerMonitor). */
+  private offResume: (() => void) | null = null
 
   private toastSeq = 0
   /** Registro do door em andamento (evita dois takeovers concorrentes). */
@@ -143,11 +196,8 @@ export class Session {
       onMeshConnection: (connection) => this.handleIncomingMeshConnection(connection),
       onDoorConnection: (connection) => this.handleDoorConnection(connection),
       onCall: (call) => this.mediaHooks.onIncomingCall(call),
-      onSignalingChange: (connected) => {
-        if (!connected) {
-          this.emitToast('warning', 'Conexao com o servidor de sinalizacao caiu; reconectando...')
-        }
-      },
+      onSignalingChange: (connected) => this.handleSignalingChange(connected),
+      onDoorHealth: (health) => this.handleDoorHealth(health),
       onMemberError: (type, message) => {
         for (const listener of this.memberErrorListeners) listener(type, message)
         if (type === 'peer-unavailable') {
@@ -218,6 +268,30 @@ export class Session {
   onToast(listener: ToastListener): () => void {
     this.toastListeners.add(listener)
     return () => this.toastListeners.delete(listener)
+  }
+
+  getHealth(): SessionHealth {
+    return this.health
+  }
+
+  /** Assina a saude do transporte; chama o listener na hora com o valor atual. */
+  onHealth(listener: HealthListener): () => void {
+    this.healthListeners.add(listener)
+    listener(this.health)
+    return () => this.healthListeners.delete(listener)
+  }
+
+  /**
+   * Verifica AGORA se a sinalizacao (member peer e porta) continua registrada.
+   * Chamada ao voltar de suspensao e pelo gancho de diagnostico.
+   */
+  checkSignalingHealth(): void {
+    this.peerManager.checkSignalingHealth()
+  }
+
+  /** Diagnostico: derruba o websocket como o servidor faria (ver `__zoiDebug`). */
+  debugDropSignaling(target: 'door' | 'member' | 'both' = 'both'): void {
+    this.peerManager.debugDropSignaling(target)
   }
 
   setMediaHooks(hooks: MediaHooks): void {
@@ -381,7 +455,22 @@ export class Session {
     return new Promise<JoinAcceptPayload>((resolve, reject) => {
       let settled = false
       let opened = false
+      /** O servidor confirmou que o id da sala NAO existe (door desregistrado). */
+      let doorMissing = false
+      const doorId = toPeerId(code)
       const connection = this.peerManager.connectToDoor(code)
+
+      // Duas falhas MUITO diferentes que antes viravam a mesma frase: a porta
+      // nao existe (codigo errado, dono saiu, registro perdido) ou a porta
+      // existe e o canal e que nao fechou (rede das duas pontas).
+      const giveUp = (): Error => {
+        if (opened) return new JoinTimeoutError()
+        if (doorMissing) return new RoomNotFoundError()
+        console.warn(
+          `[session] a porta ${doorId} nao respondeu ${JOIN_RESPONSE_TIMEOUT_MS}ms sem 'peer-unavailable': o id existe na sinalizacao e a conexao e que nao completou`
+        )
+        return new RoomUnreachableError()
+      }
 
       const finish = (action: () => void): void => {
         if (settled) return
@@ -397,11 +486,14 @@ export class Session {
       // a espera interna virava "Sem resposta da sala." no lugar de "Sala nao
       // encontrada." (e ainda saia do retry, que so cobria RoomNotFoundError).
       const timeout = setTimeout(() => {
-        finish(() => reject(opened ? new JoinTimeoutError() : new RoomNotFoundError()))
+        finish(() => reject(giveUp()))
       }, JOIN_RESPONSE_TIMEOUT_MS)
 
-      const onMemberError = (type: string): void => {
-        if (type !== 'peer-unavailable') return
+      const onMemberError = (type: string, message: string): void => {
+        // O erro precisa ser DESTA porta: um `peer-unavailable` de outro par
+        // (re-dial de mesh, por exemplo) nao diz nada sobre a sala.
+        if (type !== 'peer-unavailable' || !message.includes(doorId)) return
+        doorMissing = true
         finish(() => reject(new RoomNotFoundError()))
       }
       this.memberErrorListeners.add(onMemberError)
@@ -438,13 +530,13 @@ export class Session {
       })
 
       connection.on('close', () => {
-        // Canal que nunca abriu = nao existe door com esse codigo (sala nao
-        // encontrada). Fechou depois de aberto = o dono nao respondeu.
-        finish(() => reject(opened ? new JoinTimeoutError() : new RoomNotFoundError()))
+        // Canal que nunca abriu: `giveUp` decide entre "nao existe" e "existe
+        // mas nao conectou". Fechou depois de aberto = o dono nao respondeu.
+        finish(() => reject(giveUp()))
       })
 
       connection.on('error', () => {
-        finish(() => reject(new RoomNotFoundError()))
+        finish(() => reject(giveUp()))
       })
     })
   }
@@ -664,6 +756,8 @@ export class Session {
       await registration
     } catch (error) {
       if (error instanceof RoomCodeUnavailableError || error instanceof SignalingError) {
+        // O peer-manager continua tentando reabrir a porta em background; este
+        // aviso e so para o dono nao achar que ja pode passar o codigo adiante.
         console.warn('[session] nao foi possivel registrar o door peer:', error.message)
         this.emitToast(
           'warning',
@@ -708,8 +802,61 @@ export class Session {
 
   // --- infra ---------------------------------------------------------------
 
+  /**
+   * Queda/volta da sinalizacao do member peer. O mesh ja estabelecido nao cai
+   * junto (ICE e direto), mas sem sinalizacao nao ha novo dial nem ingresso.
+   */
+  private handleSignalingChange(connected: boolean): void {
+    const next: SessionHealth['signaling'] = connected ? 'up' : 'reconnecting'
+    if (this.health.signaling === next) return
+    const wasDown = this.health.signaling === 'reconnecting'
+    this.setHealth({ signaling: next })
+    if (!connected) {
+      this.emitToast('warning', 'Conexao com o servidor de sinalizacao caiu; reconectando...')
+      return
+    }
+    if (wasDown) this.emitToast('success', 'Conexao com o servidor de sinalizacao restabelecida.')
+  }
+
+  /**
+   * Registro da porta. Enquanto ela estiver fechada a sala CONTINUA funcionando
+   * para quem ja esta dentro, mas ninguem novo consegue entrar: o dono precisa
+   * saber disso, senao o convidado ouve "Sala nao encontrada." sem explicacao.
+   */
+  private handleDoorHealth(health: DoorHealth): void {
+    if (this.health.door === health) return
+    this.setHealth({ door: health })
+    if (health === 'failed' && !this.doorWarned) {
+      this.doorWarned = true
+      console.warn('[session] a porta da sala segue fechada; novas entradas vao falhar')
+      this.emitToast(
+        'warning',
+        'A porta da sala caiu: quem tentar entrar agora vai ver "sala nao encontrada". Reabrindo...'
+      )
+      return
+    }
+    if (health === 'open' && this.doorWarned) {
+      this.doorWarned = false
+      this.emitToast('success', 'Porta da sala reaberta; ja da para entrar de novo.')
+    }
+  }
+
+  private setHealth(patch: Partial<SessionHealth>): void {
+    this.health = { ...this.health, ...patch }
+    for (const listener of this.healthListeners) listener(this.health)
+  }
+
   private startBackgroundTimers(): void {
     this.statsMonitor.start()
+    // Queda silenciosa do websocket (servidor derruba ocioso, maquina dorme):
+    // sem esta verificacao a porta pode ficar fechada para sempre.
+    this.peerManager.startHealthChecks()
+    if (this.offResume === null) {
+      this.offResume = onSystemResume(() => {
+        console.info('[session] retomada do sistema; verificando a sinalizacao')
+        this.peerManager.checkSignalingHealth()
+      })
+    }
     if (this.quarantineTimer === null) {
       this.quarantineTimer = setInterval(() => {
         if (this.state.pendingHellos.length === 0) return
@@ -737,6 +884,12 @@ export class Session {
 
   teardown(): void {
     this.stopOwnerRebroadcast()
+    if (this.offResume !== null) {
+      this.offResume()
+      this.offResume = null
+    }
+    this.doorWarned = false
+    this.setHealth({ signaling: 'up', door: 'closed' })
     if (this.quarantineTimer !== null) {
       clearInterval(this.quarantineTimer)
       this.quarantineTimer = null
@@ -758,3 +911,17 @@ export class Session {
 }
 
 export const session = new Session()
+
+/**
+ * Gancho de DIAGNOSTICO da sinalizacao. Nao expoe nada que o proprio app ja nao
+ * faca (derrubar o proprio websocket e verificar o estado dele) e existe para
+ * reproduzir, no app instalado, a queda de conexao que so aparece depois de
+ * minutos em sala. Uso: `__zoiDebug.dropSignaling('door')` no DevTools.
+ */
+if (typeof window !== 'undefined') {
+  ;(window as unknown as { __zoiDebug: unknown }).__zoiDebug = {
+    dropSignaling: (target?: 'door' | 'member' | 'both') => session.debugDropSignaling(target),
+    checkHealth: () => session.checkSignalingHealth(),
+    health: () => session.getHealth()
+  }
+}
