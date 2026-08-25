@@ -36,8 +36,14 @@ let watchTimer: ReturnType<typeof setTimeout> | null = null
 /**
  * Abre (ou fecha, com null) uma transmissao no player. O WATCHING_UPDATE sai com
  * o debounce da SPEC para nao inundar o mesh em trocas rapidas (RF-37).
+ *
+ * Primeira camada do bloqueio de auto-visualizacao (RF-09): a propria
+ * transmissao NUNCA vira selecao, entao nenhum caminho consegue montar o player
+ * com a propria stream (e o retorno de audio deixa de existir por construcao).
  */
 export function selectTransmission(txId: string | null): void {
+  const { room } = useRoomStore.getState()
+  if (txId !== null && room.transmissions[txId]?.peerId === room.selfPeerId) return
   useRoomStore.setState({ selectedTxId: txId })
   if (watchTimer !== null) clearTimeout(watchTimer)
   watchTimer = setTimeout(() => {

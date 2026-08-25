@@ -34,6 +34,9 @@ export const StreamThumbnail = memo(function StreamThumbnail({
   const attachedRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
+    // Cinto de seguranca do bloqueio de auto-visualizacao (RF-09): a propria
+    // transmissao nunca e anexada ao video, em nenhum uso deste componente.
+    if (isSelf) return
     const element = videoRef.current
     if (!element || !stream || attachedRef.current === stream) return
     attachedRef.current = stream
@@ -41,12 +44,15 @@ export const StreamThumbnail = memo(function StreamThumbnail({
     void element.play().catch(() => {
       /* autoplay de video mudo nao costuma falhar; ignorar em caso raro */
     })
-  }, [stream])
+  }, [stream, isSelf])
 
   return (
     <button
       className={watching ? 'z-thumb z-thumb--watching' : 'z-thumb'}
-      onClick={() => onSelect(txId)}
+      onClick={() => {
+        if (isSelf) return
+        onSelect(txId)
+      }}
       data-testid="stream-thumb"
       data-tx-id={txId}
       title={`Assistir ${nickname}`}

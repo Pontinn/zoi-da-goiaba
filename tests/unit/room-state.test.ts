@@ -11,6 +11,7 @@ import {
   createInitialState,
   reduce,
   reduceAll,
+  viewersOf,
   type Effect,
   type RoomEvent,
   type RoomState
@@ -1160,6 +1161,44 @@ describe('room-state / nickname e qualidade', () => {
       message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't9' } }
     })
     expect(result.state.watching['b']).toBe('t9')
+  })
+})
+
+describe('room-state / viewersOf (contagem de espectadores, RF-11)', () => {
+  const roster = [member('owner', 1, true), member('me', 2), member('b', 3), member('c', 4)]
+
+  it('devolve 0 quando ninguem esta assistindo', () => {
+    const state = joinedState('me', roster, 'owner', 5)
+    expect(viewersOf(state, 't1')).toBe(0)
+  })
+
+  it('conta apenas quem assiste o txId pedido e ignora os nulls', () => {
+    const state = reduceAll(joinedState('me', roster, 'owner', 5), [
+      { kind: 'MESSAGE', from: 'b', now: 1, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } } },
+      { kind: 'MESSAGE', from: 'c', now: 2, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't2' } } },
+      { kind: 'MESSAGE', from: 'owner', now: 3, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: null } } }
+    ]).state
+
+    expect(viewersOf(state, 't1')).toBe(1)
+    expect(viewersOf(state, 't2')).toBe(1)
+    expect(viewersOf(state, 't3')).toBe(0)
+  })
+
+  it('sobe e desce conforme os WATCHING_UPDATE chegam', () => {
+    let state = joinedState('me', roster, 'owner', 5)
+    state = reduceAll(state, [
+      { kind: 'MESSAGE', from: 'b', now: 1, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } } },
+      { kind: 'MESSAGE', from: 'c', now: 2, message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: 't1' } } }
+    ]).state
+    expect(viewersOf(state, 't1')).toBe(2)
+
+    state = reduce(state, {
+      kind: 'MESSAGE',
+      from: 'c',
+      now: 3,
+      message: { type: 'WATCHING_UPDATE', payload: { watchingTxId: null } }
+    }).state
+    expect(viewersOf(state, 't1')).toBe(1)
   })
 })
 

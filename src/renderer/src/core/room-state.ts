@@ -269,6 +269,18 @@ export function nicknameOf(state: RoomState, peerId: string): string {
   return findMember(state, peerId)?.nickname ?? peerId.slice(0, 6)
 }
 
+/**
+ * Quantas pessoas estao assistindo a transmissao `txId` agora (RF-11). Mesma
+ * fonte dos rotulos "assistindo X" do roster: nenhum dado novo no mesh.
+ */
+export function viewersOf(state: RoomState, txId: string): number {
+  let count = 0
+  for (const watchingTxId of Object.values(state.watching)) {
+    if (watchingTxId === txId) count += 1
+  }
+  return count
+}
+
 function withLink(
   state: RoomState,
   peerId: string,

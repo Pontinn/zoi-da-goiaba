@@ -28,6 +28,22 @@ import {
 import { copyText } from '../clipboard'
 import { PlayerView } from './PlayerView'
 
+/**
+ * Placeholder do card de status (Sprint 5). O componente definitivo, com logo,
+ * motion e contagem de espectadores, entra no Sprint 6; aqui ele so ocupa o
+ * lugar da propria transmissao para o guard ser verificavel de imediato.
+ */
+function TransmissionStatusPlaceholder(): JSX.Element {
+  return (
+    <div className="z-empty" role="status" data-testid="tx-status-card">
+      <span className="z-empty__title">Transmissao iniciada</span>
+      <span className="z-empty__text">
+        Voce nao assiste a propria transmissao; isso evita o retorno de audio.
+      </span>
+    </div>
+  )
+}
+
 export function RoomScreen(): JSX.Element {
   const room = useRoomStore((state) => state.room)
   const streams = useRoomStore((state) => state.streams)
@@ -65,6 +81,11 @@ export function RoomScreen(): JSX.Element {
   }, [room.watching, room.transmissions, room.members])
 
   const selected = selectedTxId === null ? null : (room.transmissions[selectedTxId] ?? null)
+  /**
+   * Terceira camada do bloqueio (RF-09): mesmo que uma selecao legada aponte
+   * para a propria transmissao, o player nunca monta com ela.
+   */
+  const isSelfSelected = selected !== null && selected.peerId === room.selfPeerId
 
   const transmittingPeers = useMemo(
     () => new Set(transmissions.map((transmission) => transmission.peerId)),
@@ -218,7 +239,9 @@ export function RoomScreen(): JSX.Element {
         </aside>
 
         <main className="z-room__main">
-          {selected ? (
+          {selected && isSelfSelected ? (
+            <TransmissionStatusPlaceholder key={selected.txId} />
+          ) : selected ? (
             <>
               <PlayerView
                 key={selected.txId}
@@ -239,18 +262,22 @@ export function RoomScreen(): JSX.Element {
                     .filter((transmission) => transmission.txId !== selected.txId)
                     .map((transmission) => (
                       <div className="z-strip__item" key={transmission.txId}>
-                        <StreamThumbnail
-                          txId={transmission.txId}
-                          stream={streams.get(transmission.txId) ?? null}
-                          nickname={nicknameOf(room, transmission.peerId)}
-                          presetLabel={PRESETS[transmission.presetId].label}
-                          hasAudio={transmission.hasAudio}
-                          isSelf={transmission.peerId === room.selfPeerId}
-                          watching={false}
-                          reconnecting={transmission.status === 'reconnecting'}
-                          failed={mediaFailures.has(transmission.txId)}
-                          onSelect={selectTransmission}
-                        />
+                        {transmission.peerId === room.selfPeerId ? (
+                          <TransmissionStatusPlaceholder />
+                        ) : (
+                          <StreamThumbnail
+                            txId={transmission.txId}
+                            stream={streams.get(transmission.txId) ?? null}
+                            nickname={nicknameOf(room, transmission.peerId)}
+                            presetLabel={PRESETS[transmission.presetId].label}
+                            hasAudio={transmission.hasAudio}
+                            isSelf={false}
+                            watching={false}
+                            reconnecting={transmission.status === 'reconnecting'}
+                            failed={mediaFailures.has(transmission.txId)}
+                            onSelect={selectTransmission}
+                          />
+                        )}
                       </div>
                     ))}
                 </div>
@@ -275,21 +302,25 @@ export function RoomScreen(): JSX.Element {
                   className="z-item-enter"
                   style={{ '--z-delay': `${Math.min(index, 8) * 50}ms` } as CSSProperties}
                 >
-                  <StreamThumbnail
-                    txId={transmission.txId}
-                    stream={streams.get(transmission.txId) ?? null}
-                    nickname={
-                      room.members.find((member) => member.peerId === transmission.peerId)
-                        ?.nickname ?? 'alguem'
-                    }
-                    presetLabel={PRESETS[transmission.presetId].label}
-                    hasAudio={transmission.hasAudio}
-                    isSelf={transmission.peerId === room.selfPeerId}
-                    watching={selectedTxId === transmission.txId}
-                    reconnecting={transmission.status === 'reconnecting'}
-                    failed={mediaFailures.has(transmission.txId)}
-                    onSelect={selectTransmission}
-                  />
+                  {transmission.peerId === room.selfPeerId ? (
+                    <TransmissionStatusPlaceholder />
+                  ) : (
+                    <StreamThumbnail
+                      txId={transmission.txId}
+                      stream={streams.get(transmission.txId) ?? null}
+                      nickname={
+                        room.members.find((member) => member.peerId === transmission.peerId)
+                          ?.nickname ?? 'alguem'
+                      }
+                      presetLabel={PRESETS[transmission.presetId].label}
+                      hasAudio={transmission.hasAudio}
+                      isSelf={false}
+                      watching={selectedTxId === transmission.txId}
+                      reconnecting={transmission.status === 'reconnecting'}
+                      failed={mediaFailures.has(transmission.txId)}
+                      onSelect={selectTransmission}
+                    />
+                  )}
                 </div>
               ))}
             </div>
