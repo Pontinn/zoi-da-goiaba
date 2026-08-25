@@ -2,7 +2,7 @@
 // badges, grade de miniaturas ao vivo, fluxo de transmitir e moderacao do dono.
 import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import { PRESETS } from '@shared/presets'
-import { isOwner as computeIsOwner, nicknameOf } from '../../core/room-state'
+import { isOwner as computeIsOwner, nicknameOf, viewersOf } from '../../core/room-state'
 import {
   CaptureFailedError,
   mediaManager,
@@ -17,6 +17,7 @@ import { ParticipantCard } from '../components/ParticipantCard'
 import { SettingsModal } from '../components/SettingsModal'
 import { SourcePickerModal, type SourceChoice } from '../components/SourcePickerModal'
 import { StreamThumbnail } from '../components/StreamThumbnail'
+import { TransmissionStatusCard } from '../components/TransmissionStatusCard'
 import { TransmittingBar } from '../components/TransmittingBar'
 import {
   BroadcastIcon,
@@ -27,22 +28,6 @@ import {
 } from '../components/icons'
 import { copyText } from '../clipboard'
 import { PlayerView } from './PlayerView'
-
-/**
- * Placeholder do card de status (Sprint 5). O componente definitivo, com logo,
- * motion e contagem de espectadores, entra no Sprint 6; aqui ele so ocupa o
- * lugar da propria transmissao para o guard ser verificavel de imediato.
- */
-function TransmissionStatusPlaceholder(): JSX.Element {
-  return (
-    <div className="z-empty" role="status" data-testid="tx-status-card">
-      <span className="z-empty__title">Transmissao iniciada</span>
-      <span className="z-empty__text">
-        Voce nao assiste a propria transmissao; isso evita o retorno de audio.
-      </span>
-    </div>
-  )
-}
 
 export function RoomScreen(): JSX.Element {
   const room = useRoomStore((state) => state.room)
@@ -86,6 +71,16 @@ export function RoomScreen(): JSX.Element {
    * para a propria transmissao, o player nunca monta com ela.
    */
   const isSelfSelected = selected !== null && selected.peerId === room.selfPeerId
+
+  /** Espectadores da propria transmissao agora (RF-11), do mesmo dado do roster. */
+  const viewerCount = useMemo(() => (localTx ? viewersOf(room, localTx.txId) : 0), [room, localTx])
+  /**
+   * O `localTx` e a fonte mais fresca (o roster pode demorar um tique), mas no
+   * primeiro render depois do start o roster ja pode ter chegado antes: o
+   * fallback pelo estado da transmissao cobre os dois lados da corrida.
+   */
+  const ownSourceLabel = (fallback: string): string => localTx?.sourceLabel ?? fallback
+  const ownHasAudio = (fallback: boolean): boolean => localTx?.hasAudio ?? fallback
 
   const transmittingPeers = useMemo(
     () => new Set(transmissions.map((transmission) => transmission.peerId)),
@@ -240,7 +235,14 @@ export function RoomScreen(): JSX.Element {
 
         <main className="z-room__main">
           {selected && isSelfSelected ? (
-            <TransmissionStatusPlaceholder key={selected.txId} />
+            <TransmissionStatusCard
+              key={selected.txId}
+              txId={selected.txId}
+              sourceLabel={ownSourceLabel(selected.sourceLabel)}
+              hasAudio={ownHasAudio(selected.hasAudio)}
+              viewerCount={viewerCount}
+              variant="tile"
+            />
           ) : selected ? (
             <>
               <PlayerView
@@ -263,7 +265,13 @@ export function RoomScreen(): JSX.Element {
                     .map((transmission) => (
                       <div className="z-strip__item" key={transmission.txId}>
                         {transmission.peerId === room.selfPeerId ? (
-                          <TransmissionStatusPlaceholder />
+                          <TransmissionStatusCard
+                            txId={transmission.txId}
+                            sourceLabel={ownSourceLabel(transmission.sourceLabel)}
+                            hasAudio={ownHasAudio(transmission.hasAudio)}
+                            viewerCount={viewerCount}
+                            variant="strip"
+                          />
                         ) : (
                           <StreamThumbnail
                             txId={transmission.txId}
@@ -303,7 +311,13 @@ export function RoomScreen(): JSX.Element {
                   style={{ '--z-delay': `${Math.min(index, 8) * 50}ms` } as CSSProperties}
                 >
                   {transmission.peerId === room.selfPeerId ? (
-                    <TransmissionStatusPlaceholder />
+                    <TransmissionStatusCard
+                      txId={transmission.txId}
+                      sourceLabel={ownSourceLabel(transmission.sourceLabel)}
+                      hasAudio={ownHasAudio(transmission.hasAudio)}
+                      viewerCount={viewerCount}
+                      variant="tile"
+                    />
                   ) : (
                     <StreamThumbnail
                       txId={transmission.txId}

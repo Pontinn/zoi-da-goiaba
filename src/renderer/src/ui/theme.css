@@ -238,6 +238,36 @@ select {
   }
 }
 
+/**
+ * Entrada da logo no card de status: disparo unico na montagem. O overshoot vem
+ * do easing easeOutBack aplicado na classe, unica excecao de easing do app
+ * (UISPEC secao 6.2), porque a logo e o elemento caracteristico da entrada.
+ */
+@keyframes z-status-bounce-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Contagem de espectadores trocando de valor: o numero novo sobe e funde. */
+@keyframes z-count-roll-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Transicao de tela: fade + subida leve, 240ms (UISPEC secao 2). */
 .z-screen-enter {
   animation: z-fade-rise var(--dur-screen) var(--ease) both;
