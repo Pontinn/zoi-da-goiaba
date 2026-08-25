@@ -279,6 +279,19 @@
   animation: z-fade-rise var(--dur-enter) var(--ease) both;
 }
 
+/*
+ * O menu abre PARA BAIXO e invade o card seguinte. Cada card da lista vive num
+ * wrapper `.z-item-enter`, e a animacao de entrada (com transform e fill both)
+ * cria um contexto de empilhamento permanente em cada wrapper: por isso o
+ * `z-index` do menu so vale dentro do proprio card, e o card de baixo, pintado
+ * depois, cobria o menu. Subir o wrapper do card com o menu aberto resolve sem
+ * mexer na animacao de entrada.
+ */
+.z-room__aside > *:has(.z-participant__menu) {
+  position: relative;
+  z-index: 30;
+}
+
 .z-menu-item {
   display: flex;
   align-items: center;
