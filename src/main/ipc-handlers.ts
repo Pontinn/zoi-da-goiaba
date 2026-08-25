@@ -3,11 +3,13 @@ import { app, ipcMain, shell } from 'electron'
 import {
   IPC,
   type AppSettings,
+  type AudioExclusionStartResult,
   type CaptureListSourcesRequest,
   type CaptureSelectSourceRequest,
   type CaptureSource,
   type SettingsSetRequest
 } from '@shared/ipc'
+import { startAudioExclusion, stopAudioExclusion } from './audio-exclusion'
 import { listSources, selectSource } from './capture'
 import { ensureLogDirectory } from './file-logger'
 import { getSettings, NicknameValidationError, setNickname, setSoundVolume } from './settings'
@@ -38,6 +40,16 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.captureSelectSource, (_event, request: CaptureSelectSourceRequest): void => {
     selectSource(request)
+  })
+
+  // O renderer nao manda payload: a lista de processos excluidos e o PID raiz
+  // sao montados no main. Qualquer argumento recebido e ignorado de proposito.
+  ipcMain.handle(IPC.audioExclusionStart, (): Promise<AudioExclusionStartResult> =>
+    startAudioExclusion()
+  )
+
+  ipcMain.handle(IPC.audioExclusionStop, (): void => {
+    stopAudioExclusion()
   })
 
   ipcMain.handle(IPC.appGetVersion, (): string => app.getVersion())

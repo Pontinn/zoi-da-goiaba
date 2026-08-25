@@ -11,7 +11,11 @@ export const IPC = {
   updateCheck: 'update:check',
   updateInstall: 'update:install',
   updateStatus: 'update:status',
-  systemResume: 'system:resume'
+  systemResume: 'system:resume',
+  audioExclusionStart: 'audio-exclusion:start',
+  audioExclusionStop: 'audio-exclusion:stop',
+  audioExclusionStatus: 'audio-exclusion:status',
+  audioExclusionPort: 'audio-exclusion:port'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -72,18 +76,60 @@ export const CAPTURE_SELECTION_TTL_MS = 30_000
 // update
 // ---------------------------------------------------------------------------
 
-export type UpdateState =
-  | 'checking'
-  | 'available'
-  | 'downloading'
-  | 'downloaded'
-  | 'none'
-  | 'error'
+export type UpdateState = 'checking' | 'available' | 'downloading' | 'downloaded' | 'none' | 'error'
 
 export interface UpdateStatus {
   state: UpdateState
   version: string | null
   percent: number | null
+}
+
+// ---------------------------------------------------------------------------
+// audio-exclusion
+// ---------------------------------------------------------------------------
+
+export type AudioExclusionUnavailableReason =
+  /** ZOI_DISABLE_AUDIO_EXCLUSION definida (dev/E2E). */
+  | 'disabled-by-env'
+  /** Build do Windows abaixo de 10.0.20348: sem WASAPI Process Loopback. */
+  | 'os-unsupported'
+  /** O require do addon nativo falhou (binario ausente ou toolchain faltando). */
+  | 'addon-load-failed'
+  /** O utilityProcess nao subiu. */
+  | 'worker-spawn-failed'
+  /** O probe ou a ativacao do WASAPI devolveu erro. */
+  | 'activation-failed'
+
+export type AudioExclusionStartResult =
+  | { mode: 'process-exclusion'; sampleRate: 48000; channels: 2 }
+  | { mode: 'unavailable'; reason: AudioExclusionUnavailableReason }
+
+export type AudioExclusionState = 'active' | 'degraded-full-loopback' | 'failed'
+
+export interface AudioExclusionStatus {
+  state: AudioExclusionState
+  /** Texto tecnico curto para log; a UI usa so `state`. */
+  detail: string | null
+}
+
+/** Canal do `window.postMessage` que leva o MessagePort ao mundo principal. */
+export const AUDIO_EXCLUSION_PORT_CHANNEL = 'zoi:audio-exclusion-port'
+
+/** Cadencia e formato do PCM entregue pelo worker (contrato do SPEC 5.C). */
+export const AUDIO_EXCLUSION_SAMPLE_RATE = 48000
+export const AUDIO_EXCLUSION_CHANNELS = 2
+export const AUDIO_EXCLUSION_FRAME_MS = 10
+
+/**
+ * Frame PCM de 10 ms no MessagePort worker -> renderer. `data` e float32
+ * interleaved LR e vai por COPIA: o MessagePortMain do Electron so aceita
+ * MessagePortMain na lista de transferencia, entao nao existe transferencia de
+ * ArrayBuffer aqui (verificado no spike do Sprint 1).
+ */
+export interface AudioExclusionPcmMessage {
+  type: 'pcm'
+  timestampUs: number
+  data: ArrayBuffer
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +160,17 @@ export interface ZoiApi {
     install(): Promise<void>
     /** Registra listener de `update:status`; retorna a funcao de descarte. */
     onStatus(listener: (status: UpdateStatus) => void): () => void
+  }
+  audioExclusion: {
+    /**
+     * Arma a captura de audio com exclusao das arvores proibidas. Nunca lanca:
+     * qualquer falha vira `{ mode: 'unavailable', reason }`.
+     */
+    start(): Promise<AudioExclusionStartResult>
+    /** Idempotente: parar sem captura ativa e no-op. */
+    stop(): Promise<void>
+    /** Registra listener de `audio-exclusion:status`; retorna o descarte. */
+    onStatus(listener: (status: AudioExclusionStatus) => void): () => void
   }
   system: {
     /**

@@ -883,9 +883,7 @@ export class Session {
     // Membros novos no roster: abrir mesh e avisar a midia (re-call, RF-22).
     const joined = this.state.members
       .map((member) => member.peerId)
-      .filter(
-        (peerId) => peerId !== this.state.selfPeerId && !previousMembers.includes(peerId)
-      )
+      .filter((peerId) => peerId !== this.state.selfPeerId && !previousMembers.includes(peerId))
     for (const peerId of joined) {
       this.dial(peerId)
       this.mediaHooks.onMemberJoined(peerId)

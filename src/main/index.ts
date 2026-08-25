@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, shell, powerMonitor, BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
+import { registerAudioExclusionWindow, stopAudioExclusion } from './audio-exclusion'
 import { registerDisplayMediaHandler } from './capture'
 import { attachRendererLogging, logToFile, startFileLogger } from './file-logger'
 import { registerIpcHandlers } from './ipc-handlers'
@@ -118,6 +119,7 @@ if (!gotTheLock) {
     startFileLogger()
     registerIpcHandlers()
     registerUpdaterIpc(() => mainWindow)
+    registerAudioExclusionWindow(() => mainWindow)
     registerDisplayMediaHandler()
 
     mainWindow = createWindow()
@@ -139,6 +141,9 @@ if (!gotTheLock) {
   })
 
   app.on('window-all-closed', () => {
+    // Sem janela nao ha para quem entregar PCM: derruba o worker de captura
+    // antes de sair, para nao deixar processo utilitario orfao.
+    stopAudioExclusion()
     app.quit()
   })
 }

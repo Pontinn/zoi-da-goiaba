@@ -86,9 +86,7 @@ export function registerDisplayMediaHandler(): void {
             callback({})
             return
           }
-          callback(
-            selection.withAudio ? { video: source, audio: 'loopback' } : { video: source }
-          )
+          callback(selection.withAudio ? { video: source, audio: 'loopback' } : { video: source })
         })
         .catch((error: unknown) => {
           console.error('[capture] falha ao resolver a fonte armada:', error)

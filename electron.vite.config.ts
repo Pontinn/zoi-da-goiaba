@@ -11,7 +11,11 @@ export default defineConfig({
     resolve: { alias: sharedAlias },
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') }
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // Entry propria: e o arquivo que o utilityProcess.fork carrega.
+          'audio-capture-worker': resolve(__dirname, 'src/main/audio-capture-worker.ts')
+        }
       }
     }
   },

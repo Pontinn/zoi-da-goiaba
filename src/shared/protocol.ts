@@ -63,13 +63,7 @@ export type PresetId = 'p720_30' | 'p1080_30' | 'p1080_30_hq' | 'p1080_60' | 'p1
 export type SourceKind = 'screen' | 'window'
 export type QualityLevel = 'good' | 'medium' | 'bad'
 export type RosterChangeKind =
-  | 'join'
-  | 'leave'
-  | 'kick'
-  | 'ban'
-  | 'timeout'
-  | 'nickname'
-  | 'transfer'
+  'join' | 'leave' | 'kick' | 'ban' | 'timeout' | 'nickname' | 'transfer'
 export type JoinRejectReason = 'room_full' | 'banned' | 'version_mismatch' | 'invalid_payload'
 export type ModRemoveMode = 'kick' | 'ban'
 export type TxStopReason = 'manual' | 'source_switch' | 'leaving'
@@ -311,7 +305,11 @@ export function isHelloPayload(value: unknown): value is HelloPayload {
 }
 
 export function isRosterChange(value: unknown): value is RosterChange {
-  return isRecord(value) && isOneOf(value['kind'], ROSTER_CHANGE_KINDS) && isString(value['targetPeerId'])
+  return (
+    isRecord(value) &&
+    isOneOf(value['kind'], ROSTER_CHANGE_KINDS) &&
+    isString(value['targetPeerId'])
+  )
 }
 
 export function isRosterUpdatePayload(value: unknown): value is RosterUpdatePayload {
@@ -420,11 +418,7 @@ export function isEnvelope(value: unknown): value is Envelope {
 // ---------------------------------------------------------------------------
 
 export type EnvelopeRejectReason =
-  | 'not_an_envelope'
-  | 'version_mismatch'
-  | 'unknown_type'
-  | 'invalid_payload'
-  | 'from_mismatch'
+  'not_an_envelope' | 'version_mismatch' | 'unknown_type' | 'invalid_payload' | 'from_mismatch'
 
 export type EnvelopeValidation =
   | { ok: true; message: ProtocolMessage; from: string; ts: number }

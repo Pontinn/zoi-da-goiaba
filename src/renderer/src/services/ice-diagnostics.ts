@@ -415,7 +415,9 @@ export function observeSignalingCandidates(peer: unknown, tag: string): () => vo
       const key = describeConnectionId(message)
       const total = (received.get(key) ?? 0) + 1
       received.set(key, total)
-      console.info(`${prefix} CANDIDATE recebido de ${describePeer(message.src)} conn=${key} (#${total})`)
+      console.info(
+        `${prefix} CANDIDATE recebido de ${describePeer(message.src)} conn=${key} (#${total})`
+      )
     }
     socket.on('message', onMessage)
 

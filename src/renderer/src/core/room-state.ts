@@ -169,10 +169,7 @@ export interface MessageEvent {
 
 export interface PeerLinkEvent {
   kind:
-    | 'PEER_LINK_UP'
-    | 'PEER_LINK_RECONNECTING'
-    | 'PEER_LINK_RECONNECT_TIMEOUT'
-    | 'PEER_LINK_FAILED'
+    'PEER_LINK_UP' | 'PEER_LINK_RECONNECTING' | 'PEER_LINK_RECONNECT_TIMEOUT' | 'PEER_LINK_FAILED'
   peerId: string
   now: number
 }
@@ -309,9 +306,7 @@ function withoutKeys<T>(record: Record<string, T>, keys: readonly string[]): Rec
 }
 
 function transmissionsOf(state: RoomState, peerId: string): TransmissionState[] {
-  return Object.values(state.transmissions).filter(
-    (transmission) => transmission.peerId === peerId
-  )
+  return Object.values(state.transmissions).filter((transmission) => transmission.peerId === peerId)
 }
 
 function dropTransmissionsOf(
@@ -493,9 +488,7 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
       if (!target) {
         return {
           state,
-          effects: [
-            { kind: 'log', level: 'warn', text: 'OWNER_TRANSFER para peer fora do roster' }
-          ]
+          effects: [{ kind: 'log', level: 'warn', text: 'OWNER_TRANSFER para peer fora do roster' }]
         }
       }
       const rosterVersion = Math.max(state.rosterVersion, message.payload.rosterVersion)
@@ -938,7 +931,10 @@ function applySnapshot(
     }
   }
 
-  if (nextState.ownerPeerId === nextState.selfPeerId && state.ownerPeerId !== nextState.selfPeerId) {
+  if (
+    nextState.ownerPeerId === nextState.selfPeerId &&
+    state.ownerPeerId !== nextState.selfPeerId
+  ) {
     effects.push({ kind: 'assumeOwnership', rebroadcast: false })
   }
 
@@ -995,9 +991,7 @@ function effectsForChange(
         nextMembers.find((member) => member.peerId === targetPeerId)?.nickname ??
         nicknameOf(previous, targetPeerId)
       return {
-        effects: [
-          { kind: 'showToast', tone: 'info', text: `${nickname} agora e o dono da sala.` }
-        ],
+        effects: [{ kind: 'showToast', tone: 'info', text: `${nickname} agora e o dono da sala.` }],
         announcedPeers: announced
       }
     }
@@ -1158,7 +1152,10 @@ function applyOwnerTimeout(state: RoomState, ownerPeerId: string, now: number): 
         kind: 'broadcast',
         message: {
           type: 'ROSTER_UPDATE',
-          payload: buildRosterUpdate(nextState, { kind: 'transfer', targetPeerId: state.selfPeerId })
+          payload: buildRosterUpdate(nextState, {
+            kind: 'transfer',
+            targetPeerId: state.selfPeerId
+          })
         }
       }
     ]
@@ -1244,8 +1241,7 @@ function applyOwnerRemove(state: RoomState, event: OwnerRemoveEvent): ReducerRes
   if (!target) return { state, effects: [] }
 
   const banList =
-    event.mode === 'ban' &&
-    !state.banList.some((entry) => entry.installId === target.installId)
+    event.mode === 'ban' && !state.banList.some((entry) => entry.installId === target.installId)
       ? [...state.banList, { installId: target.installId, nickname: target.nickname }]
       : state.banList
 
@@ -1340,9 +1336,7 @@ function applyLocalNickname(state: RoomState, event: LocalNicknameEvent): Reduce
 }
 
 function applyLocalTxStart(state: RoomState, event: LocalTxStartEvent): ReducerResult {
-  const previous = transmissionsOf(state, state.selfPeerId).map(
-    (transmission) => transmission.txId
-  )
+  const previous = transmissionsOf(state, state.selfPeerId).map((transmission) => transmission.txId)
   // Copia obrigatoria pelo mesmo motivo do TX_START remoto (imutabilidade).
   const transmissions = { ...withoutKeys(state.transmissions, previous) }
   transmissions[event.txId] = {
@@ -1384,12 +1378,10 @@ function applyLocalTxStop(state: RoomState, event: LocalTxStopEvent): ReducerRes
   return {
     state: { ...state, transmissions: withoutKeys(state.transmissions, txIds) },
     effects: [
-      ...txIds.map(
-        (txId): Effect => ({
-          kind: 'broadcast',
-          message: { type: 'TX_STOP', payload: { txId, reason: event.reason } }
-        })
-      ),
+      ...txIds.map((txId): Effect => ({
+        kind: 'broadcast',
+        message: { type: 'TX_STOP', payload: { txId, reason: event.reason } }
+      })),
       { kind: 'playSound', sound: 'stoppedTransmitting' }
     ]
   }
