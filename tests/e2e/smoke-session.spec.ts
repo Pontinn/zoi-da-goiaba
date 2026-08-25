@@ -11,6 +11,7 @@ import { expect, test } from '@playwright/test'
 import {
   closeInstance,
   createRoom,
+  expectNoDirectionFallbacks,
   expectRoster,
   joinRoom,
   launchInstance,
@@ -102,5 +103,9 @@ test.describe('smoke de sessao (2 instancias)', () => {
     await leaveRoom(guest)
     await expectRoster(owner, [OWNER])
     await leaveRoom(owner)
+
+    // 13. Nada disso pode ter passado por fallback de direcao: entre duas
+    //     instancias da mesma maquina o caminho normal tem que bastar.
+    expectNoDirectionFallbacks([owner, guest])
   })
 })

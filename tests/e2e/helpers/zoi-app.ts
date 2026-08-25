@@ -37,7 +37,16 @@ export interface ZoiInstance {
   readonly userDataDir: string
   /** Erros de console coletados desde o boot (diagnostico em caso de falha). */
   readonly consoleErrors: string[]
+  /** TODAS as linhas de console: usadas para provar que um fallback NAO rodou. */
+  readonly consoleLines: string[]
 }
+
+/**
+ * Marcas dos fallbacks de direcao (chamada reversa de midia e dial-back da
+ * admissao). Em rede saudavel nenhuma delas pode aparecer: os fallbacks so
+ * existem para quando o caminho normal falha.
+ */
+const DIRECTION_FALLBACK_MARKS = ['media-pull', 'dialback', 'discando de volta', 'na outra direcao']
 
 /** Espera visivel na variante assistida; instantanea na execucao normal. */
 export async function pace(): Promise<void> {
@@ -89,12 +98,23 @@ export async function launchInstance(label: string, nickname: string): Promise<Z
 
   const page = await app.firstWindow({ timeout: LAUNCH_TIMEOUT_MS })
   const consoleErrors: string[] = []
+  const consoleLines: string[] = []
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(`[${label}] ${message.text()}`)
+    const text = `[${label}] ${message.text()}`
+    consoleLines.push(text)
+    if (message.type() === 'error') consoleErrors.push(text)
   })
   page.on('pageerror', (error) => consoleErrors.push(`[${label}] pageerror: ${error.message}`))
 
-  const instance: ZoiInstance = { label, nickname, app, page, userDataDir, consoleErrors }
+  const instance: ZoiInstance = {
+    label,
+    nickname,
+    app,
+    page,
+    userDataDir,
+    consoleErrors,
+    consoleLines
+  }
 
   // Primeira execucao (RF-11): perfil novo sempre cai na tela de apelido.
   const nicknameField = page.getByLabel('Como te chamam?')
@@ -229,6 +249,24 @@ export async function leaveRoom(instance: ZoiInstance): Promise<void> {
   await instance.page.getByTestId('leave-room').click()
   await expect(instance.page.getByTestId('greeting')).toBeVisible({ timeout: ROOM_TIMEOUT_MS })
   await pace()
+}
+
+/**
+ * Prova que a sessao inteira rodou pelo caminho normal. Os fallbacks de direcao
+ * (chamada reversa de midia, dial-back da admissao) so podem existir quando a
+ * conexao direta falha: se um deles aparecer numa sessao saudavel entre duas
+ * instancias da MESMA maquina, e regressao.
+ */
+export function expectNoDirectionFallbacks(instances: (ZoiInstance | null)[]): void {
+  const hits: string[] = []
+  for (const instance of instances) {
+    if (!instance) continue
+    for (const line of instance.consoleLines) {
+      const lowered = line.toLowerCase()
+      if (DIRECTION_FALLBACK_MARKS.some((mark) => lowered.includes(mark))) hits.push(line)
+    }
+  }
+  expect(hits, 'fallback de direcao disparou em rede saudavel').toEqual([])
 }
 
 /**
