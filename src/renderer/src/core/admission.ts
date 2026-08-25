@@ -21,7 +21,8 @@ export interface AdmissionContext {
 }
 
 export type AdmissionDecision =
-  { accept: JoinAcceptPayload; member: RosterMember } | { reject: JoinRejectPayload }
+  | { accept: JoinAcceptPayload; member: RosterMember }
+  | { reject: JoinRejectPayload }
 
 /**
  * Avalia o envelope BRUTO recebido no door peer. Recebe o raw (nao a mensagem ja

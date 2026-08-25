@@ -87,8 +87,7 @@ export function logToFile(level: LogLevel, text: string): void {
   }
   if (capped) return
 
-  const message =
-    text.length > MAX_MESSAGE_LENGTH ? `${text.slice(0, MAX_MESSAGE_LENGTH)}...` : text
+  const message = text.length > MAX_MESSAGE_LENGTH ? `${text.slice(0, MAX_MESSAGE_LENGTH)}...` : text
   const line = `${now.toISOString()} ${level.toUpperCase()} ${message}\n`
 
   if (currentBytes >= MAX_FILE_BYTES) {

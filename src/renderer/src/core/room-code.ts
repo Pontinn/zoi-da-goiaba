@@ -13,7 +13,8 @@ const VALID_CODE_PATTERN = /^[a-zA-Z0-9-]+$/
 export type RoomCodeErrorCode = 'too_short' | 'too_long' | 'invalid_chars'
 
 export type RoomCodeValidation =
-  { ok: true; code: string } | { ok: false; error: RoomCodeErrorCode }
+  | { ok: true; code: string }
+  | { ok: false; error: RoomCodeErrorCode }
 
 /** Normalizacao canonica: trim + lowercase (AC-29). */
 export function normalize(code: string): string {

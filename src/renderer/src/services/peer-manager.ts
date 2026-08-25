@@ -382,26 +382,23 @@ export class PeerManager {
     const peer = this.memberPeer
     if (!peer || peer.destroyed) return
 
-    this.memberReconnectTimer = setTimeout(
-      () => {
-        this.memberReconnectTimer = null
-        const current = this.memberPeer
-        if (this.disposing || !current || current.destroyed) return
-        if (!current.disconnected) {
-          this.callbacks.onSignalingChange(true)
-          return
-        }
-        try {
-          console.info(`[peer ${stamp()}] member reconnect (tentativa ${attempt + 1})`)
-          current.reconnect()
-        } catch (error) {
-          console.warn('[peer] falha ao reconectar a sinalizacao:', error)
-        }
-        // O `open` confirma e cancela o ciclo; enquanto nao vier, insiste.
-        this.scheduleMemberReconnect(attempt + 1)
-      },
-      backoffMs(attempt, SIGNALING_RECONNECT_MAX_BACKOFF_MS)
-    )
+    this.memberReconnectTimer = setTimeout(() => {
+      this.memberReconnectTimer = null
+      const current = this.memberPeer
+      if (this.disposing || !current || current.destroyed) return
+      if (!current.disconnected) {
+        this.callbacks.onSignalingChange(true)
+        return
+      }
+      try {
+        console.info(`[peer ${stamp()}] member reconnect (tentativa ${attempt + 1})`)
+        current.reconnect()
+      } catch (error) {
+        console.warn('[peer] falha ao reconectar a sinalizacao:', error)
+      }
+      // O `open` confirma e cancela o ciclo; enquanto nao vier, insiste.
+      this.scheduleMemberReconnect(attempt + 1)
+    }, backoffMs(attempt, SIGNALING_RECONNECT_MAX_BACKOFF_MS))
   }
 
   /** Uma operacao de porta por vez (registro inicial, takeover, recuperacao). */
