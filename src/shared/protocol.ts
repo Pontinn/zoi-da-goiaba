@@ -125,6 +125,13 @@ export interface TxStartPayload {
   sourceKind: SourceKind
   sourceLabel: string
   startedAt: number
+  /**
+   * Codec que o transmissor esta usando nesta transmissao. Tipo ABERTO (string)
+   * pelo mesmo motivo de `decodes`. Serve ao espectador que precisa OFERTAR na
+   * chamada reversa (pull): sem isso a oferta dele sairia na ordem default do
+   * Chromium e o transmissor acabaria enviando VP8.
+   */
+  videoCodec?: string
 }
 
 export interface TxStopPayload {
@@ -140,6 +147,14 @@ export interface QualityUpdatePayload {
   level: QualityLevel
   rttMs: number
   inboundBitrateKbps: number | null
+  /**
+   * Codecs de video que ESTA maquina decodifica bem (RF-05/RF-06). Campo
+   * OPCIONAL e de tipo aberto (string[]): um cliente futuro pode anunciar um
+   * nome que este aqui nao conhece sem que a mensagem inteira seja descartada.
+   * Ausente = versao antiga (ou sondagem ainda nao resolvida): o consumidor le
+   * como ['VP8'].
+   */
+  decodes?: string[]
 }
 
 export interface ModRemovePayload {
@@ -338,7 +353,11 @@ export function isTxStartPayload(value: unknown): value is TxStartPayload {
     isBoolean(value['hasAudio']) &&
     isOneOf(value['sourceKind'], SOURCE_KINDS) &&
     isString(value['sourceLabel']) &&
-    isFiniteNumber(value['startedAt'])
+    isFiniteNumber(value['startedAt']) &&
+    // Campo aditivo e ABERTO: um codec desconhecido nunca invalida a mensagem
+    // inteira (cliente antigo nao manda nada, cliente futuro pode mandar outro
+    // nome). Quem consome normaliza.
+    (value['videoCodec'] === undefined || isString(value['videoCodec']))
   )
 }
 
@@ -360,7 +379,10 @@ export function isQualityUpdatePayload(value: unknown): value is QualityUpdatePa
     isRecord(value) &&
     isOneOf(value['level'], QUALITY_LEVELS) &&
     isFiniteNumber(value['rttMs']) &&
-    (value['inboundBitrateKbps'] === null || isFiniteNumber(value['inboundBitrateKbps']))
+    (value['inboundBitrateKbps'] === null || isFiniteNumber(value['inboundBitrateKbps'])) &&
+    // Aditivo e ABERTO pelo mesmo motivo do `videoCodec`: array de string basta,
+    // nada de enum fechado aqui.
+    (value['decodes'] === undefined || isArrayOf(value['decodes'], isString))
   )
 }
 

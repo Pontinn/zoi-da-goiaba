@@ -12,7 +12,13 @@ import {
 import { startAudioExclusion, stopAudioExclusion } from './audio-exclusion'
 import { listSources, selectSource } from './capture'
 import { ensureLogDirectory } from './file-logger'
-import { getSettings, NicknameValidationError, setNickname, setSoundVolume } from './settings'
+import {
+  getSettings,
+  NicknameValidationError,
+  setForceVp8,
+  setNickname,
+  setSoundVolume
+} from './settings'
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.settingsGet, (): AppSettings => getSettings())
@@ -23,6 +29,7 @@ export function registerIpcHandlers(): void {
       let settings = getSettings()
       if (request?.nickname !== undefined) settings = setNickname(request.nickname)
       if (request?.soundVolume !== undefined) settings = setSoundVolume(request.soundVolume)
+      if (request?.forceVp8 !== undefined) settings = setForceVp8(request.forceVp8)
       return settings
     } catch (error) {
       if (error instanceof NicknameValidationError) {
