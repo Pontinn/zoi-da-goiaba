@@ -7,6 +7,9 @@ export interface TransmittingBarProps {
   sourceLabel: string
   presetLabel: string
   hasAudio: boolean
+  /** Modo nitidez ligado: prioriza detalhe da imagem no lugar da fluidez. */
+  sharpness: boolean
+  onSharpnessChange: (next: boolean) => void
   onSwitch: () => void
   onStop: () => void
 }
@@ -15,6 +18,8 @@ export const TransmittingBar = memo(function TransmittingBar({
   sourceLabel,
   presetLabel,
   hasAudio,
+  sharpness,
+  onSharpnessChange,
   onSwitch,
   onStop
 }: TransmittingBarProps): JSX.Element {
@@ -28,6 +33,21 @@ export const TransmittingBar = memo(function TransmittingBar({
         {sourceLabel} · {presetLabel} · {hasAudio ? 'com audio' : 'sem audio'}
       </span>
       <span className="z-transmitting-bar__spacer" />
+      <button
+        className={sharpness ? 'z-switch z-switch--bar z-switch--on' : 'z-switch z-switch--bar'}
+        role="switch"
+        aria-checked={sharpness}
+        title="Ligado, prioriza a nitidez do texto e perde quadros quando a rede aperta. Desligado, prioriza o movimento fluido."
+        onClick={() => onSharpnessChange(!sharpness)}
+        data-testid="sharpness-toggle"
+      >
+        <span className="z-switch__track">
+          <span className="z-switch__thumb" />
+        </span>
+        <span className="z-switch__label">
+          <span>Nitidez</span>
+        </span>
+      </button>
       <button className="z-transmitting-bar__btn" onClick={onSwitch}>
         <SwapIcon size={13} /> Trocar fonte
       </button>

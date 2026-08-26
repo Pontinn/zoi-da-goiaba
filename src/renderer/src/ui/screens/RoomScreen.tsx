@@ -40,6 +40,12 @@ export function RoomScreen(): JSX.Element {
   const [pickerBusy, setPickerBusy] = useState(false)
   const [banTarget, setBanTarget] = useState<{ peerId: string; nickname: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Modo nitidez: escopo da transmissao ATUAL. O backend tambem zera o estado a
+  // cada `startTransmission`, entao as duas pontas precisam concordar. O txId
+  // fica GUARDADO junto do valor em vez de um efeito que zera por mudanca de
+  // transmissao: assim uma transmissao nova ja nasce desligada na renderizacao,
+  // sem o render intermediario (e a regra de lint) de um setState em efeito.
+  const [sharpnessOfTx, setSharpnessOfTx] = useState<{ txId: string; on: boolean } | null>(null)
 
   const iAmOwner = computeIsOwner(room)
   const code = room.roomMeta?.code ?? ''
@@ -103,6 +109,25 @@ export function RoomScreen(): JSX.Element {
       }
     })
   }, [excludedTxId, pushToast])
+
+  const localTxId = localTx?.txId ?? null
+  // Vale so para a transmissao que esta no ar: qualquer txId novo le desligado.
+  const sharpness = sharpnessOfTx !== null && sharpnessOfTx.txId === localTxId && sharpnessOfTx.on
+
+  const changeSharpness = useCallback(
+    (next: boolean): void => {
+      if (!localTxId) return
+      setSharpnessOfTx({ txId: localTxId, on: next })
+      try {
+        mediaManager.setSharpnessMode(next)
+      } catch {
+        // O contrato diz que este caminho nao lanca; se lancar, o usuario fica
+        // sabendo em vez de olhar um toggle que nao significa nada.
+        pushToast('warning', 'Nao foi possivel mudar o modo nitidez agora.')
+      }
+    },
+    [localTxId, pushToast]
+  )
 
   const transmittingPeers = useMemo(
     () => new Set(transmissions.map((transmission) => transmission.peerId)),
@@ -182,6 +207,8 @@ export function RoomScreen(): JSX.Element {
           sourceLabel={localTx.sourceLabel}
           presetLabel={PRESETS[localTx.presetId].label}
           hasAudio={localTx.hasAudio}
+          sharpness={sharpness}
+          onSharpnessChange={changeSharpness}
           onSwitch={() => setPicker('switch')}
           onStop={stopTransmission}
         />
