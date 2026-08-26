@@ -564,6 +564,32 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
     case 'TX_START': {
       if (!senderIsMember) return rejectFrom(state, from, senderIsMember, 'TX_START')
       const payload = message.payload
+      const videoCodec = isVideoCodecId(payload.videoCodec) ? payload.videoCodec : null
+
+      // REANUNCIO: TX_START de uma transmissao JA CONHECIDA do MESMO remetente e
+      // ATUALIZACAO (o transmissor trocou de codec), nao transmissao nova. Sem
+      // esta regra a sala inteira ouviria o som "transmitindo" a cada
+      // rebaixamento. `startedAt` e `status` sao preservados de proposito.
+      const known = state.transmissions[payload.txId]
+      if (known && known.peerId === from) {
+        return {
+          state: {
+            ...state,
+            transmissions: {
+              ...state.transmissions,
+              [payload.txId]: {
+                ...known,
+                presetId: payload.presetId,
+                hasAudio: payload.hasAudio,
+                sourceKind: payload.sourceKind,
+                sourceLabel: payload.sourceLabel,
+                videoCodec
+              }
+            }
+          },
+          effects: []
+        }
+      }
       // RF-18: TX_START novo do mesmo peer substitui o anterior.
       const previous = transmissionsOf(state, from).map((transmission) => transmission.txId)
       // A copia e obrigatoria: `withoutKeys` devolve o MESMO objeto quando nao ha
@@ -579,7 +605,7 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
         sourceLabel: payload.sourceLabel,
         startedAt: payload.startedAt,
         status: 'live',
-        videoCodec: isVideoCodecId(payload.videoCodec) ? payload.videoCodec : null
+        videoCodec
       }
       const selfWatchingTxId = previous.includes(state.selfWatchingTxId ?? '')
         ? null
