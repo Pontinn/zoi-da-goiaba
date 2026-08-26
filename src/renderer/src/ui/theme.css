@@ -184,6 +184,23 @@ select {
   }
 }
 
+/**
+ * Saida do aviso de espera do primeiro quadro. NOME NOVO de proposito: o cartao
+ * ja terminou `z-fade-in ... both`, e (a) animation com fill vence transition na
+ * mesma propriedade e (b) reaplicar o MESMO nome com `reverse` nao reinicia a
+ * animacao (so a troca de animation-name reinicia), o que faria o cartao saltar
+ * para opacity 0 em corte seco.
+ */
+@keyframes z-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes z-pop-in {
   from {
     opacity: 0;
@@ -211,6 +228,22 @@ select {
 
   50% {
     opacity: 0.35;
+  }
+}
+
+/**
+ * Pulso do indicador de espera do primeiro quadro: so opacity, no espirito
+ * medido de `z-live-pulse`, que nao pode ser reusado 1:1 porque significa "ao
+ * vivo", nao "aguardando". Amplitude menor: a espera e calma, nao um alerta.
+ */
+@keyframes z-waiting-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
   }
 }
 
