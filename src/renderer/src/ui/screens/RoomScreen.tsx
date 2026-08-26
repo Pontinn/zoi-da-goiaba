@@ -27,6 +27,7 @@ export function RoomScreen(): JSX.Element {
   const room = useRoomStore((state) => state.room)
   const streams = useRoomStore((state) => state.streams)
   const mediaFailures = useRoomStore((state) => state.mediaFailures)
+  const inboundVideoStats = useRoomStore((state) => state.inboundVideoStats)
   const localTx = useRoomStore((state) => state.localTx)
   const qualityTick = useRoomStore((state) => state.qualityTick)
   const selectedTxId = useRoomStore((state) => state.selectedTxId)
@@ -290,6 +291,7 @@ export function RoomScreen(): JSX.Element {
                 failed={mediaFailures.has(selected.txId)}
                 quality={room.quality[selected.peerId]}
                 qualityTick={qualityTick}
+                videoStats={inboundVideoStats.get(selected.txId)}
                 onBack={() => selectTransmission(null)}
               />
               {transmissions.length > 1 ? (
