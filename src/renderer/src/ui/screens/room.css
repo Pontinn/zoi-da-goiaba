@@ -686,3 +686,20 @@
   background: #ffffff;
   transform: translateX(12px);
 }
+
+/*
+ * Switch sozinho (sem rotulo dentro) para o lado direito de uma `z-row-between`
+ * das Configuracoes: o texto ja mora a esquerda da linha, entao a superficie do
+ * `.z-switch` daria uma caixa dentro da caixa.
+ */
+.z-switch--inline {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  gap: 0;
+}
+
+.z-switch--inline:hover {
+  background: transparent;
+}

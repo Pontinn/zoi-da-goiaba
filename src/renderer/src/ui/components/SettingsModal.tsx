@@ -1,7 +1,9 @@
 // Configuracoes: apelido com round-trip (campo pre-preenchido, RF-13/AC-08),
-// volume dos sons do app e versao do app com "verificar atualizacoes" (F4).
+// volume dos sons do app, versao do app com "verificar atualizacoes" (F4) e o
+// escape de modo compatibilidade (transmite e recebe sempre no codec antigo).
 import { useRef, useState } from 'react'
 import { NICKNAME_MAX_LENGTH } from '@shared/ipc'
+import { isForceVp8, setForceVp8 } from '../../services/codec-capabilities'
 import { session } from '../../services/session'
 import { getSoundVolume, playSound, setSoundVolume } from '../../services/sound-player'
 import { useAppStore } from '../../store/app-store'
@@ -36,6 +38,23 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
   const [soundVolume, setSoundVolumeDraft] = useState(() => getSoundVolume())
   // So salva e da o feedback sonoro quando o usuario mexeu de fato no slider.
   const volumeDirty = useRef(false)
+  // O boot ja alimentou o modulo com o valor persistido: aqui so se le.
+  const [forceVp8, setForceVp8Draft] = useState(() => isForceVp8())
+
+  /**
+   * Commit IMEDIATO, como o volume: nao depende do botao Salvar (que continua
+   * sendo so do apelido). O modulo em runtime muda ANTES da gravacao, porque o
+   * efeito no caminho de midia e imediato; se o IPC falhar, tudo volta.
+   */
+  const toggleForceVp8 = (next: boolean): void => {
+    setForceVp8Draft(next)
+    setForceVp8(next)
+    void window.zoi.settings.set({ forceVp8: next }).catch(() => {
+      setForceVp8Draft(!next)
+      setForceVp8(!next)
+      pushToast('warning', 'Nao foi possivel salvar o modo compatibilidade.')
+    })
+  }
 
   const dragSoundVolume = (value: number): void => {
     volumeDirty.current = true
@@ -108,7 +127,7 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
     <Modal
       open
       title="Configuracoes"
-      subtitle="Seu apelido e a versao do app."
+      subtitle="Seu apelido, os sons e a compatibilidade de video."
       onClose={onClose}
       footer={
         <>
@@ -210,6 +229,31 @@ function SettingsForm({ onClose }: { onClose: () => void }): JSX.Element {
         <Button size="sm" loading={openingLogs} onClick={() => void openLogs()}>
           Abrir pasta de logs
         </Button>
+      </div>
+
+      <div className="z-row-between" style={{ marginTop: 'var(--space-3)' }}>
+        <div>
+          <div className="z-secondary" style={{ fontSize: 'var(--text-secondary-size)' }}>
+            Modo compatibilidade
+          </div>
+          <div className="z-secondary" style={{ fontSize: 'var(--text-meta)' }}>
+            Transmite e recebe sempre no codec antigo. Ligue so se o video travar ou aparecer preto.
+          </div>
+        </div>
+        <button
+          className={
+            forceVp8 ? 'z-switch z-switch--inline z-switch--on' : 'z-switch z-switch--inline'
+          }
+          role="switch"
+          aria-checked={forceVp8}
+          aria-label="Modo compatibilidade"
+          onClick={() => toggleForceVp8(!forceVp8)}
+          data-testid="settings-force-vp8"
+        >
+          <span className="z-switch__track">
+            <span className="z-switch__thumb" />
+          </span>
+        </button>
       </div>
     </Modal>
   )
