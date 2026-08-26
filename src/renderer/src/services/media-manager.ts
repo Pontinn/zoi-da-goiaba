@@ -197,6 +197,8 @@ export class MediaManager implements MediaHooks {
    * inclusive o par de versao antiga que esta na sala ha dez minutos.
    */
   private readonly memberFirstSeenAt = new Map<string, number>()
+  /** Modo nitidez (RF-16..RF-19): escopo de SESSAO, nunca persistido. */
+  private sharpness = false
   private readonly pendingCalls: PendingCall[] = []
   private pendingTimer: ReturnType<typeof setInterval> | null = null
   private readonly streamsListeners = new Set<StreamsListener>()
@@ -327,6 +329,8 @@ export class MediaManager implements MediaHooks {
   /** RF-16/RF-17/RF-18: inicia a unica transmissao local permitida. */
   async startTransmission(options: StartTransmissionOptions): Promise<LocalTransmission> {
     if (this.local) throw new TransmissionInProgressError()
+    // RF-19: toda transmissao nova comeca com o modo nitidez DESLIGADO.
+    this.sharpness = false
 
     const preset = PRESETS[options.presetId]
     // A sonda de codificacao depende do preset escolhido e e aguardada: quem
@@ -431,6 +435,7 @@ export class MediaManager implements MediaHooks {
     const transmission = this.local
     if (!transmission) return
     this.local = null
+    this.sharpness = false
 
     for (const outgoing of this.outgoingCalls.values()) {
       outgoing.disposeIce()
@@ -442,6 +447,42 @@ export class MediaManager implements MediaHooks {
 
     this.session.announceTransmissionStop(reason)
     this.notifyStreams()
+  }
+
+  /**
+   * RF-16..RF-19: liga/desliga o modo nitidez AO VIVO, sem parar a transmissao.
+   * Ligado, a imagem prefere manter RESOLUCAO (texto legivel) e sacrifica taxa
+   * de quadros; desligado volta ao padrao de movimento. Idempotente.
+   */
+  setSharpnessMode(on: boolean): void {
+    if (!this.local) {
+      this.sharpness = on
+      return
+    }
+    this.sharpness = on
+
+    const videoTrack = this.local.stream.getVideoTracks()[0]
+    if (videoTrack) videoTrack.contentHint = on ? 'detail' : 'motion'
+
+    for (const outgoing of this.outgoingCalls.values()) {
+      const connection = outgoing.call.peerConnection
+      if (!connection) continue
+      const videoSender = connection.getSenders().find((sender) => sender.track?.kind === 'video')
+      if (!videoSender) continue
+      const parameters = videoSender.getParameters()
+      // Nada de mexer em `encodings` aqui: bitrate e framerate sao do preset.
+      parameters.degradationPreference = on ? 'maintain-resolution' : 'maintain-framerate'
+      videoSender.setParameters(parameters).catch((error: unknown) => {
+        console.warn('[media] falha ao aplicar o modo nitidez:', error)
+      })
+    }
+
+    console.info(`[codec] modo nitidez ${on ? 'ligado' : 'desligado'}`)
+  }
+
+  /** Estado corrente do modo nitidez (sempre false fora de transmissao). */
+  isSharpnessMode(): boolean {
+    return this.sharpness
   }
 
   /** RF-19: trocar fonte = parar a atual e comecar a nova. */
@@ -513,7 +554,9 @@ export class MediaManager implements MediaHooks {
         encoding.maxBitrate = preset.maxBitrate
         encoding.maxFramerate = preset.frameRate
       }
-      parameters.degradationPreference = 'maintain-framerate'
+      // Quem entra depois (membro novo, redial de rebaixamento) herda o modo
+      // nitidez corrente sem que ninguem precise reaplicar nada.
+      parameters.degradationPreference = this.sharpness ? 'maintain-resolution' : 'maintain-framerate'
       videoSender.setParameters(parameters).catch((error: unknown) => {
         console.warn('[media] falha ao aplicar parametros do sender:', error)
       })
@@ -911,6 +954,7 @@ export class MediaManager implements MediaHooks {
     // no `stopTransmission` faria a transmissao seguinte enxergar todo mundo
     // como recem chegado e ignorar de novo o par de versao antiga.
     this.memberFirstSeenAt.clear()
+    this.sharpness = false
     if (this.local) {
       this.local.stream.getTracks().forEach((track) => track.stop())
       this.local.stopAudioExclusion?.()
@@ -923,3 +967,15 @@ export class MediaManager implements MediaHooks {
 /** Instancia unica ligada a sessao do app. */
 export const mediaManager = new MediaManager(session)
 session.setMediaHooks(mediaManager)
+
+/**
+ * Gancho de DIAGNOSTICO do caminho de midia (mesmo espirito de
+ * `__zoiDebug.dropSignaling`). Vive aqui porque `session.ts` nao importa o
+ * mediaManager: a dependencia e ao contrario.
+ * Uso: `__zoiDebugMedia.sharpness(true)` no DevTools.
+ */
+if (typeof window !== 'undefined') {
+  ;(window as unknown as { __zoiDebugMedia: unknown }).__zoiDebugMedia = {
+    sharpness: (on: boolean) => mediaManager.setSharpnessMode(on)
+  }
+}
