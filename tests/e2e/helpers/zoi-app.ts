@@ -97,14 +97,31 @@ function cleanEnv(): Record<string, string> {
   return env
 }
 
+export interface LaunchOptions {
+  /**
+   * Perfil que JA existe, para reabrir a mesma instalacao. E o que permite
+   * provar round-trip de configuracao: fechar o app e voltar com o disco de
+   * antes. Sem isso cada boot nasce num perfil novo e nada persiste.
+   */
+  userDataDir?: string
+}
+
 /**
  * Sobe uma instancia isolada e passa pela primeira execucao gravando o apelido.
  * Cada instancia tem o proprio `userData` (perfil temporario), o que tambem
- * neutraliza a trava de instancia unica do main.
+ * neutraliza a trava de instancia unica do main. Com `options.userDataDir` o
+ * perfil e reaproveitado e a primeira execucao NAO acontece de novo (o apelido
+ * ja esta no disco), entao o boot cai direto na home.
  */
-export async function launchInstance(label: string, nickname: string): Promise<ZoiInstance> {
-  const userDataDir = mkdtempSync(join(tmpdir(), `zoi-e2e-${label.toLowerCase()}-`))
-  seedSilentSettings(userDataDir)
+export async function launchInstance(
+  label: string,
+  nickname: string,
+  options: LaunchOptions = {}
+): Promise<ZoiInstance> {
+  const reusedProfile = options.userDataDir !== undefined
+  const userDataDir =
+    options.userDataDir ?? mkdtempSync(join(tmpdir(), `zoi-e2e-${label.toLowerCase()}-`))
+  if (!reusedProfile) seedSilentSettings(userDataDir)
   const app = await electron.launch({
     // A maquina de desenvolvimento e o desktop diario de uma pessoa: uma sessao
     // de teste com 3 instancias tocaria os sons do app e o audio da transmissao
@@ -142,6 +159,13 @@ export async function launchInstance(label: string, nickname: string): Promise<Z
     consoleLines
   }
 
+  if (reusedProfile) {
+    // Perfil de antes: o apelido ja esta gravado e o app abre direto na home.
+    await expect(page.getByTestId('greeting')).toBeVisible({ timeout: LAUNCH_TIMEOUT_MS })
+    await pace()
+    return instance
+  }
+
   // Primeira execucao (RF-11): perfil novo sempre cai na tela de apelido.
   const nicknameField = page.getByLabel('Como te chamam?')
   await expect(nicknameField).toBeVisible({ timeout: LAUNCH_TIMEOUT_MS })
@@ -154,8 +178,16 @@ export async function launchInstance(label: string, nickname: string): Promise<Z
   return instance
 }
 
+export interface CloseOptions {
+  /** Guarda o perfil no disco para um `launchInstance` reabrir depois. */
+  keepProfile?: boolean
+}
+
 /** Fecha a instancia e apaga o perfil temporario. Nunca lanca. */
-export async function closeInstance(instance: ZoiInstance | null): Promise<void> {
+export async function closeInstance(
+  instance: ZoiInstance | null,
+  options: CloseOptions = {}
+): Promise<void> {
   if (!instance) return
   if (instance.consoleErrors.length > 0) {
     console.log(`erros de console em ${instance.label}:\n  ${instance.consoleErrors.join('\n  ')}`)
@@ -165,6 +197,7 @@ export async function closeInstance(instance: ZoiInstance | null): Promise<void>
   } catch (error) {
     console.warn(`falha ao fechar a instancia ${instance.label}:`, error)
   }
+  if (options.keepProfile) return
   try {
     rmSync(instance.userDataDir, { recursive: true, force: true, maxRetries: 5 })
   } catch (error) {
