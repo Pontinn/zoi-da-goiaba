@@ -31,12 +31,15 @@ export interface AppSettings {
   installId: string
   /** Volume dos sons do app (0..1). Ausente ou invalido no disco vira o padrao. */
   soundVolume: number
+  /** Escape "modo compatibilidade": transmite E recebe sempre VP8 (RF-12..RF-14). */
+  forceVp8: boolean
 }
 
 /** Cada campo presente e aplicado; os ausentes ficam como estao. */
 export interface SettingsSetRequest {
   nickname?: string
   soundVolume?: number
+  forceVp8?: boolean
 }
 
 /** Limites de nickname (assumption A9 da SPEC): 1 a 24 chars apos trim. */

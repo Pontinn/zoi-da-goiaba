@@ -117,6 +117,13 @@ if (!gotTheLock) {
     app.setAppUserModelId('com.pontin.zoidagoiaba')
 
     startFileLogger()
+    // A disponibilidade de codec e sempre decidida em runtime, nunca por versao;
+    // este registro existe so para o diagnostico em campo saber com o que esta
+    // lidando quando um driver de encoder se comporta mal.
+    logToFile(
+      'info',
+      `[codec] chromium ${process.versions.chrome} electron ${process.versions.electron}`
+    )
     registerIpcHandlers()
     registerUpdaterIpc(() => mainWindow)
     registerAudioExclusionWindow(() => mainWindow)

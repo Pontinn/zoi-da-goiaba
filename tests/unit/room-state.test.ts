@@ -449,6 +449,7 @@ describe('room-state / transmissoes', () => {
       hasAudio: false,
       sourceKind: 'window',
       sourceLabel: 'VLC',
+      videoCodec: 'VP8',
       now: 40
     })
     expect(broadcasts(started.effects)[0]).toMatchObject({ type: 'TX_START' })
@@ -473,6 +474,7 @@ describe('room-state / transmissoes', () => {
       hasAudio: false,
       sourceKind: 'screen',
       sourceLabel: 'Tela 1',
+      videoCodec: 'VP8',
       now: 40
     })
     expect(before.transmissions).toEqual({})
@@ -1084,6 +1086,7 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
       hasAudio: true,
       sourceKind: 'screen',
       sourceLabel: 'Tela 1',
+      videoCodec: 'VP8',
       now: 10
     }).state
     const result = reduce(transmitting, { kind: 'SELF_LEAVE', now: 1_000 })
@@ -1392,5 +1395,212 @@ describe('room-state / sequencias completas', () => {
     expect(result.state.transmissions).toEqual({})
     expect(result.state.rosterVersion).toBe(6)
     expect(sounds(result.effects)).toEqual(['entered', 'transmitting', 'left'])
+  })
+})
+
+// --- video-codec-upgrade: anuncio de decodificacao e idempotencia do TX_START
+
+describe('room-state / capacidade de decodificacao anunciada pela sala', () => {
+  function roomOfThree(): RoomState {
+    return joinedState(
+      'me',
+      [member('owner', 1, true), member('me', 2), member('outro', 3)],
+      'owner'
+    )
+  }
+
+  function qualityFrom(from: string, decodes?: string[]): RoomEvent {
+    return {
+      kind: 'MESSAGE',
+      from,
+      now: 5_000,
+      message: {
+        type: 'QUALITY_UPDATE',
+        payload: {
+          level: 'good',
+          rttMs: 30,
+          inboundBitrateKbps: 900,
+          ...(decodes ? { decodes } : {})
+        }
+      }
+    }
+  }
+
+  it('QUALITY_UPDATE COM decodes grava a lista normalizada', () => {
+    const result = reduce(roomOfThree(), qualityFrom('owner', ['VP8', 'AV1', 'H265']))
+    expect(result.state.decodeCapabilities).toEqual({ owner: ['AV1', 'VP8'] })
+    // O agregado de qualidade continua sendo gravado como antes.
+    expect(result.state.quality['owner']?.level).toBe('good')
+  })
+
+  it('QUALITY_UPDATE SEM decodes (versao antiga) NAO cria entrada nenhuma', () => {
+    const result = reduce(roomOfThree(), qualityFrom('owner'))
+    expect(result.state.decodeCapabilities).toEqual({})
+  })
+
+  it('o ultimo anuncio do par vence', () => {
+    const first = reduce(roomOfThree(), qualityFrom('owner', ['AV1', 'VP8']))
+    const second = reduce(first.state, qualityFrom('owner', ['VP8']))
+    expect(second.state.decodeCapabilities).toEqual({ owner: ['VP8'] })
+  })
+
+  it('QUALITY_UPDATE de quem NAO esta no roster nao grava capacidade', () => {
+    const result = reduce(roomOfThree(), qualityFrom('intruso', ['AV1', 'VP8']))
+    expect(result.state.decodeCapabilities).toEqual({})
+  })
+
+  it('a poda por ROSTER_UPDATE remove a capacidade de quem saiu', () => {
+    const announced = reduce(roomOfThree(), qualityFrom('outro', ['AV1', 'VP8'])).state
+    expect(announced.decodeCapabilities['outro']).toBeDefined()
+    const pruned = reduce(announced, {
+      kind: 'MESSAGE',
+      from: 'owner',
+      now: 6_000,
+      message: {
+        type: 'ROSTER_UPDATE',
+        payload: rosterUpdate({
+          rosterVersion: 9,
+          members: [member('owner', 1, true), member('me', 2)],
+          lastChange: { kind: 'leave', targetPeerId: 'outro' }
+        })
+      }
+    })
+    expect(pruned.state.decodeCapabilities).toEqual({})
+  })
+
+  it('a poda por kick do dono remove a capacidade do removido', () => {
+    const base = ownerState([member('owner', 1, true), member('novo', 2)])
+    const announced = reduce(base, {
+      kind: 'MESSAGE',
+      from: 'novo',
+      now: 5_000,
+      message: {
+        type: 'QUALITY_UPDATE',
+        payload: { level: 'good', rttMs: 20, inboundBitrateKbps: 500, decodes: ['AV1', 'VP8'] }
+      }
+    }).state
+    expect(announced.decodeCapabilities['novo']).toEqual(['AV1', 'VP8'])
+    const kicked = reduce(announced, {
+      kind: 'OWNER_REMOVE',
+      peerId: 'novo',
+      mode: 'kick',
+      now: 6_000
+    })
+    expect(kicked.state.decodeCapabilities).toEqual({})
+  })
+
+  it('o dono que caiu perde a capacidade quando este cliente assume a sala', () => {
+    const base = joinedState('me', [member('owner', 1, true), member('me', 2)], 'owner')
+    const announced = reduce(base, qualityFrom('owner', ['AV1', 'VP8'])).state
+    expect(announced.decodeCapabilities['owner']).toEqual(['AV1', 'VP8'])
+    const elected = reduce(announced, {
+      kind: 'PEER_LINK_RECONNECT_TIMEOUT',
+      peerId: 'owner',
+      now: 60_000
+    })
+    expect(elected.state.ownerPeerId).toBe('me')
+    expect(elected.state.decodeCapabilities['owner']).toBeUndefined()
+  })
+
+  it('applyLocalQuality leva os decodes locais no broadcast', () => {
+    const result = reduce(roomOfThree(), {
+      kind: 'LOCAL_QUALITY',
+      level: 'good',
+      rttMs: 25,
+      inboundBitrateKbps: 800,
+      decodes: ['AV1', 'VP9', 'H264', 'VP8'],
+      now: 5_000
+    })
+    expect(broadcasts(result.effects)).toEqual([
+      {
+        type: 'QUALITY_UPDATE',
+        payload: {
+          level: 'good',
+          rttMs: 25,
+          inboundBitrateKbps: 800,
+          decodes: ['AV1', 'VP9', 'H264', 'VP8']
+        }
+      }
+    ])
+  })
+
+  it('estado inicial nasce sem nenhuma capacidade conhecida', () => {
+    expect(createInitialState().decodeCapabilities).toEqual({})
+  })
+})
+
+describe('room-state / TX_START idempotente (reanuncio de codec)', () => {
+  const base = (): RoomState =>
+    joinedState('me', [member('owner', 1, true), member('me', 2), member('outro', 3)], 'owner')
+
+  function txStart(from: string, txId: string, videoCodec?: string, now = 1_000): RoomEvent {
+    return {
+      kind: 'MESSAGE',
+      from,
+      now,
+      message: {
+        type: 'TX_START',
+        payload: {
+          txId,
+          presetId: 'p1080_30',
+          hasAudio: true,
+          sourceKind: 'screen',
+          sourceLabel: 'Tela 1',
+          startedAt: now,
+          ...(videoCodec ? { videoCodec } : {})
+        }
+      }
+    }
+  }
+
+  it('TX_START novo grava o codec anunciado e toca som + toast', () => {
+    const result = reduce(base(), txStart('owner', 'tx1', 'AV1'))
+    expect(result.state.transmissions['tx1']?.videoCodec).toBe('AV1')
+    expect(sounds(result.effects)).toEqual(['transmitting'])
+    expect(kinds(result.effects)).toContain('showToast')
+  })
+
+  it('TX_START sem videoCodec (versao antiga) grava null', () => {
+    const result = reduce(base(), txStart('owner', 'tx1'))
+    expect(result.state.transmissions['tx1']?.videoCodec).toBeNull()
+  })
+
+  it('TX_START com codec DESCONHECIDO grava null em vez de sujar o estado', () => {
+    const result = reduce(base(), txStart('owner', 'tx1', 'H265'))
+    expect(result.state.transmissions['tx1']?.videoCodec).toBeNull()
+  })
+
+  it('reanuncio do MESMO remetente com o MESMO txId atualiza sem som nem toast', () => {
+    const first = reduce(base(), txStart('owner', 'tx1', 'AV1', 1_000)).state
+    const again = reduce(first, txStart('owner', 'tx1', 'VP8', 9_000))
+
+    expect(again.state.transmissions['tx1']?.videoCodec).toBe('VP8')
+    // O que NAO pode mudar no reanuncio:
+    expect(again.state.transmissions['tx1']?.startedAt).toBe(1_000)
+    expect(again.state.transmissions['tx1']?.status).toBe('live')
+    expect(again.effects).toEqual([])
+  })
+
+  it('reanuncio nao mexe no que este cliente esta assistindo', () => {
+    const first = reduce(base(), txStart('owner', 'tx1', 'AV1')).state
+    const watching = reduce(first, { kind: 'LOCAL_WATCHING', txId: 'tx1', now: 2_000 }).state
+    const again = reduce(watching, txStart('owner', 'tx1', 'VP8', 9_000))
+    expect(again.state.selfWatchingTxId).toBe('tx1')
+  })
+
+  it('txId NOVO do mesmo remetente continua sendo transmissao nova (som + toast)', () => {
+    const first = reduce(base(), txStart('owner', 'tx1', 'AV1')).state
+    const second = reduce(first, txStart('owner', 'tx2', 'AV1', 9_000))
+    expect(sounds(second.effects)).toEqual(['transmitting'])
+    expect(second.state.transmissions['tx1']).toBeUndefined()
+    expect(second.state.transmissions['tx2']?.videoCodec).toBe('AV1')
+  })
+
+  it('txId conhecido vindo de OUTRO peer NAO vira atualizacao silenciosa', () => {
+    const first = reduce(base(), txStart('owner', 'tx1', 'AV1')).state
+    const forged = reduce(first, txStart('outro', 'tx1', 'VP8', 9_000))
+    // Transmissao de outro dono: caminho normal, com som, e nao atualizacao.
+    expect(forged.state.transmissions['tx1']?.peerId).toBe('outro')
+    expect(sounds(forged.effects)).toEqual(['transmitting'])
   })
 })

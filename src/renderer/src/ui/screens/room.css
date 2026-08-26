@@ -641,3 +641,65 @@
   font-size: var(--text-meta);
   color: var(--text-muted);
 }
+
+/*
+ * Variante do switch para dentro da barra de transmissao. A estrutura HTML e as
+ * classes-base sao as MESMAS do `.z-switch`; so as cores e a escala mudam,
+ * porque os tokens de superficie escura (`--bg-elevated`, `--border`,
+ * `--accent`) somem em cima do fundo solido `--danger` da barra. Os brancos
+ * translucidos aqui sao os mesmos que os botoes da barra ja usam.
+ */
+.z-switch--bar {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
+  gap: var(--space-2);
+  font-size: var(--text-meta);
+  font-weight: 500;
+}
+
+.z-switch--bar:hover {
+  background: transparent;
+}
+
+.z-switch--bar .z-switch__track {
+  width: 30px;
+  height: 18px;
+  background: #ffffff26;
+  border-color: #ffffff59;
+}
+
+.z-switch--bar .z-switch__thumb {
+  width: 12px;
+  height: 12px;
+  background: #ffffffcc;
+}
+
+.z-switch--bar.z-switch--on .z-switch__track {
+  background: #ffffff59;
+  border-color: #ffffff;
+}
+
+.z-switch--bar.z-switch--on .z-switch__thumb {
+  background: #ffffff;
+  transform: translateX(12px);
+}
+
+/*
+ * Switch sozinho (sem rotulo dentro) para o lado direito de uma `z-row-between`
+ * das Configuracoes: o texto ja mora a esquerda da linha, entao a superficie do
+ * `.z-switch` daria uma caixa dentro da caixa.
+ */
+.z-switch--inline {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  gap: 0;
+}
+
+.z-switch--inline:hover {
+  background: transparent;
+}

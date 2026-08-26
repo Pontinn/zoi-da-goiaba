@@ -2,7 +2,7 @@
 feature: video-codec-upgrade
 language: pt-BR
 type: change
-status: in-progress
+status: done
 created: 2026-08-25
 ---
 
@@ -17,6 +17,13 @@ A transmissao hoje negocia VP8 (default do PeerJS), o codec mais antigo e menos 
 - 2026-08-25: usuario decidiu que codec e FEATURE COMPLETA (pipeline forge normal), separada do quick de presets (hq-presets, ja feito). Motivo: mexe no coracao do caminho de midia recem estabilizado em campo (fallbacks de direcao, pull, watchdog) e tem matriz de risco real.
 - 2026-08-25: o modo "nitidez" vai DE CARONA nesta feature (toggle no transmissor: contentHint 'detail' + degradationPreference 'maintain-resolution', para leitura/codigo/imagem parada; hoje e fixo 'motion' + 'maintain-framerate').
 - 2026-08-25 (finalizacao com o usuario): TERA escape manual nas Configuracoes ("forcar modo compatibilidade/VP8"), persistido, como rede de seguranca se AV1/VP9 der problema em alguma maquina. Resolve P5.
+- 2026-08-26 (retomada): toggle do modo nitidez vive na TransmittingBar, alternavel AO VIVO durante a transmissao (sem reiniciar). NAO persiste entre sessoes: sempre inicia desligado (padrao 'motion'), pois nitidez e situacional. Resolve P3.
+- 2026-08-26: criterio de aceitacao (P4) = log + teste real. Objetivo: log mostra codec negociado + encoderImplementation (hw/sw) em cada maquina, sem regressao de fps/travamento e sem qualityLimitationReason 'cpu'. Subjetivo: uma sessao real do grupo confirmando qualidade igual ou melhor. Resolve P4.
+- 2026-08-26: escolha de codec considera a SALA TODA: cada membro anuncia no mesh o que decodifica bem (mediaCapabilities.decodingInfo) e o transmissor escolhe um codec que sirva a todos (grupo tem notebook fraco que tambem assiste). Fecha a decisao de produto do P1 item 3; o COMO (formato do anuncio, compat com versao antiga que nao anuncia) fica para a SPEC.
+- 2026-08-26: rebaixamento automatico e MUST nesta feature: se getStats do transmissor mostrar qualityLimitationReason 'cpu' persistente, trocar para codec mais leve e rediscar. Motivo do usuario: deteccao previa pode errar; sem isso, maquina fraca mal detectada trava ate alguem mexer na config. CUIDADO registrado: o redial deve REUSAR a mecanica estabilizada (watchdog/redial existentes) e nao pode disparar os logs vigiados por expectNoDirectionFallbacks fora de fallback real.
+- 2026-08-26: quando fluidez e beleza conflitam em maquina fraca transmitindo, FLUIDEZ GANHA (ex: H264 por hardware liso vence VP9 por software mais eficiente por bit). O caso real do grupo e o notebook que trava.
+- 2026-08-26: escape "forcar compatibilidade/VP8" vale para TRANSMITIR E RECEBER: maquina com escape ligado transmite em VP8 e se anuncia como "so VP8" para a sala. Consequencia aceita: com a escolha valendo para a sala toda, um membro com escape ligado leva o transmissor a usar VP8 para ele (rede de seguranca completa cobre bug de encode E de decode).
+- 2026-08-26: hook tecnico confirmado pelo CONTEXT: PeerJS 1.5.5 nao da janela para setCodecPreferences (oferta criada sincronamente dentro de call()); o caminho e options.sdpTransform, simetrico em call() e answer(), cobrindo tambem o pull. Detalhe fino na SPEC.
 - 2026-08-25: OBJETIVO DUPLO confirmado na conversa com o usuario. Caso real do grupo: um amigo com notebook antigo/fraco TRAVA o video ao transmitir (CPU nao da conta de capturar+codificar VP8 em software). Notebooks Intel antigos costumam ter encoder de H264 em HARDWARE (QuickSync): a matriz de escolha deve incluir H264-hw como opcao para maquina fraca (fluidez), alem de AV1/VP9 para maquina forte (qualidade). "Reduzir travamento em maquina fraca ao transmitir" vira objetivo e criterio de aceitacao ao lado de "mais bonito no mesmo bitrate". CUIDADO ja registrado: AV1/VP9 em software em maquina fraca PIORA o travamento; a detecao por maquina e obrigatoria, nunca preferencia global fixa.
 
 ## 3. Escopo
@@ -26,6 +33,8 @@ Dentro:
 - Deteccao de capacidade por maquina (encoder de hardware disponivel?) para escolher AV1 vs VP9 vs manter VP8.
 - Fallback limpo para VP8 quando o outro lado nao suporta ou esta em versao antiga.
 - Toggle "modo nitidez" no fluxo de transmissao.
+- Rebaixamento automatico de codec em qualityLimitationReason 'cpu' persistente no transmissor (must, decisao 2026-08-26), reusando a mecanica de watchdog/redial existente.
+- Escape manual "forcar compatibilidade/VP8" nas Configuracoes, persistido, valendo para transmitir e receber.
 
 Fora (NAO tocar):
 - TURN/infra de rede; presets (ja resolvido no hq-presets); audio; simulcast/SFU (multi-espectador continua N copias).
@@ -41,12 +50,15 @@ N/A por acao de sala: escolha e automatica (ou local do transmissor, no caso do 
 
 ## 6. Entidades e ciclo de vida
 
-- Possivel preferencia persistida (ex: forcar VP8 se der problema; lembrar modo nitidez). Discutir na Stage 1.
+- Preferencia persistida: "forcar compatibilidade/VP8" nas Configuracoes PERSISTE (rede de seguranca, decisao de 2026-08-25).
+- Modo nitidez NAO persiste: estado de sessao, sempre inicia desligado (decisao de 2026-08-26).
 
 ## 7. Regras de negocio e exemplos
 
 - Exemplo alvo: filme 1080p30 a 4 Mbps em AV1 deve aparentar qualidade proxima de VP8 a ~7-8 Mbps.
 - Regra de escolha (rascunho, confirmar na SPEC): AV1 se encoder de HARDWARE presente; senao VP9 (bom equilibrio em software); senao VP8. Nunca escolher codec que force software pesado em maquina fraca.
+- Regra de desempate (decisao 2026-08-26): fluidez ganha de beleza em maquina fraca. Exemplo trabalhado: notebook antigo com QuickSync transmite em H264 por hardware (liso), mesmo que VP9 por software renderia imagem melhor por bit; PC forte com encoder AV1 por hardware transmite AV1.
+- A escolha deve servir a sala toda: exemplo trabalhado: transmissor forte (AV1 hw) + espectador notebook fraco que so decodifica bem H264/VP8 = transmissor NAO usa AV1; escolhe o melhor codec que todos decodificam bem.
 
 ## 8. Casos de borda / caminhos tristes
 
@@ -58,24 +70,28 @@ N/A por acao de sala: escolha e automatica (ou local do transmissor, no caso do 
 
 ## 9. Referencia de UI
 
-mode: project-identity. Superficie de UI minima: toggle do modo nitidez no fluxo de transmitir (SourcePickerModal ou TransmittingBar) e, se necessario, escape de codec nas Configuracoes.
+mode: project-identity. Superficie de UI minima: toggle do modo nitidez na TransmittingBar (alternavel ao vivo, decisao 2026-08-26) + escape "forcar compatibilidade/VP8" na SettingsModal.
 
 ## 10. Prioridades
 
-- Must: melhorar qualidade percebida sem regressao de performance nem de compatibilidade.
-- Nice: modo nitidez; escape manual de codec; telemetria simples no log ([ice]/stats ja existem) dizendo qual codec foi negociado.
+- Must: melhorar qualidade percebida sem regressao de performance nem de compatibilidade; reduzir travamento de maquina fraca ao transmitir (encoder de hardware quando existir); rebaixamento automatico em limite de cpu (decisao 2026-08-26); escape manual "forcar VP8" persistido (transmitir e receber); log do codec negociado + encoderImplementation por maquina (base do criterio de aceitacao).
+- Nice: modo nitidez (de carona, baixo risco).
 
 ## 11. Assumptions confirmadas
 
-- (a confirmar na retomada) Grupo todo em Win11 com auto-update: janela de versoes mistas e curta.
+- CONFIRMADA 2026-08-26: grupo todo em Win11 com auto-update do app ligado; janela de versoes mistas e curta (dias). Fallback VP8 para versao antiga precisa funcionar, mas e transitorio.
+- CONFIRMADA 2026-08-26: em maquina fraca, fluidez ganha de beleza (ver Decisoes).
+- CONFIRMADA 2026-08-26: modo nitidez sempre inicia desligado (padrao 'motion' preserva o comportamento atual para video/jogo).
 
 ## 12. Pontos em aberto (lista viva)
 
 - P1: Criterio exato de deteccao de encoder de hardware no Electron/Chromium. ESBOCO discutido com o usuario (2026-08-25), validar na SPEC: (1) DETECCAO com navigator.mediaCapabilities.encodingInfo({type:'webrtc', video:{contentType/width/height/framerate/bitrate do preset}}) por codec (AV1, VP9, H264): escolher o melhor com powerEfficient=true (hardware); sem hardware nenhum, VP8/VP9 conforme CPU. Complemento: RTCRtpSender.getCapabilities('video') para o que e negociavel. (2) VERIFICACAO pos-conexao via getStats(): encoderImplementation (hw vs sw de verdade) e qualityLimitationReason=='cpu' como gatilho de rebaixamento automatico + redial (mesmo espirito do watchdog de midia existente). (3) LADO RECEPTOR: decodificar tambem conta (AV1 sw em notebook velho engasga); considerar cada membro anunciar no mesh o que decodifica bem (mediaCapabilities.decodingInfo) e o transmissor escolher codec que sirva a sala toda: decisao da SPEC.
-- P2: AV1 vs VP9 como alvo principal (medir nas maquinas reais do grupo).
-- P3: Onde vive o toggle do modo nitidez e se persiste.
-- P4: Criterio de aceitacao mensuravel ("melhorou"): comparacao lado a lado? bitrate/qualidade nos stats?
-- P5: Escape manual (config "forcar compatibilidade/VP8")?
+- P2: AV1 vs VP9 como alvo principal (medir nas maquinas reais do grupo; fica para SPEC/teste).
+- P3: RESOLVIDO 2026-08-26 (TransmittingBar, ao vivo, sem persistencia; ver Decisoes).
+- P4: RESOLVIDO 2026-08-26 (log + teste real; ver Decisoes).
+- P5: RESOLVIDO 2026-08-25 (tera escape manual persistido nas Configuracoes; ver Decisoes).
+- P6 (novo, 2026-08-26, para a SPEC): um codec UNICO para a sala vs negociar POR ESPECTADOR. Sao N RTCPeerConnections independentes, entao tecnicamente cada espectador poderia receber um codec diferente; mas isso pode multiplicar instancias de encoder no transmissor (custo de CPU) e conflita com o espirito do RF-24 (parametros identicos). A decisao do usuario (sala toda) assume codec unico; a SPEC deve validar se ha razao forte para por-espectador e o custo real do fanout N (unknown do CONTEXT: encoder compartilhado ou nao).
+- P7 (novo, 2026-08-26, para a SPEC): como o rebaixamento automatico redisca sem disparar os fallbacks de direcao nem os logs vigiados por expectNoDirectionFallbacks; qual o criterio de "persistente" para qualityLimitationReason 'cpu' (evitar flapping).
 
 ## 13. APENDICE: contexto tecnico do projeto (para sessao com contexto ZERO)
 

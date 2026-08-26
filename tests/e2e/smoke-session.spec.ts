@@ -107,6 +107,24 @@ test.describe('smoke de sessao (2 instancias)', () => {
       )
       .toBeGreaterThan(0)
 
+    // 8d. Instrumento de codec (RF-11/AC-12/AC-28): o transmissor registra o
+    //     codec e o encoder REAIS por conexao e o espectador registra o que
+    //     esta recebendo. Sem depender de hardware especifico: o que se exige e
+    //     a linha existir, nao qual codec foi negociado.
+    const transmitter = owner
+    await expect
+      .poll(
+        () => transmitter.consoleLines.filter((line) => /\[codec\] envio .*impl=/.test(line)).length,
+        { timeout: TIMEOUTS.media }
+      )
+      .toBeGreaterThan(0)
+    await expect
+      .poll(
+        () => watching.consoleLines.filter((line) => line.includes('[codec] recepcao ')).length,
+        { timeout: TIMEOUTS.media }
+      )
+      .toBeGreaterThan(0)
+
     // 9. Controles somem sozinhos sem atividade e voltam ao mexer o mouse
     //    (RNF-07). O auto-hide e por classe, o elemento continua no DOM.
     const controls = guest.page.getByTestId('player-controls')

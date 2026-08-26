@@ -89,6 +89,26 @@ export const QUALITY_GOOD_MAX_RTT_MS = 150
 export const QUALITY_BAD_MIN_RTT_MS = 400
 export const QUALITY_BAD_MIN_PACKET_LOSS = 0.05
 
+/**
+ * Escolha e rebaixamento de codec de video. As unidades em "SAMPLES" sao
+ * amostras do tick de 3s do monitor de qualidade (QUALITY_UPDATE_INTERVAL_MS),
+ * que e o unico relogio usado pela feature (RNF-07: nenhum coletor novo).
+ */
+/** Amostras ignoradas depois de comecar ou trocar de codec: o arranque do encoder gera 'cpu' transitorio. */
+export const CODEC_CPU_WARMUP_SAMPLES = 3
+/** Amostras CONSECUTIVAS de 'cpu' que configuram saturacao persistente (12s). */
+export const CODEC_CPU_PERSISTENT_SAMPLES = 4
+/** Teto de rebaixamentos por CPU numa mesma transmissao (evita cadeia de redials). */
+export const CODEC_MAX_DOWNGRADES = 2
+/** Cadencia do log periodico de codec por conexao (5 amostras = 15s). */
+export const CODEC_LOG_EVERY_N_SAMPLES = 5
+/**
+ * Carencia POR MEMBRO ate um par que nunca anunciou passar a contar como
+ * ['VP8']. Dobro do tick de 3s: cobre o tempo de o mesh dele abrir mais um
+ * QUALITY_UPDATE.
+ */
+export const CODEC_MEMBER_GRACE_MS = 6_000
+
 /** Espera pelo TX_START correspondente ao metadata de uma chamada de midia. */
 export const CALL_METADATA_WAIT_MS = 5_000
 

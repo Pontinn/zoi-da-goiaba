@@ -3,7 +3,19 @@
 // Pilar de performance: nada aqui roda por frame; tudo e eventual.
 import type { MediaConnection } from 'peerjs'
 import {
+  nextLowerCodec,
+  pickRoomCodec,
+  preferVideoCodec,
+  VIDEO_CODEC_PRIORITY,
+  type VideoCodecId
+} from '@shared/codecs'
+import {
   CALL_METADATA_WAIT_MS,
+  CODEC_CPU_PERSISTENT_SAMPLES,
+  CODEC_CPU_WARMUP_SAMPLES,
+  CODEC_LOG_EVERY_N_SAMPLES,
+  CODEC_MAX_DOWNGRADES,
+  CODEC_MEMBER_GRACE_MS,
   ICE_ATTACH_MAX_ATTEMPTS,
   ICE_ATTACH_RETRY_INTERVAL_MS,
   MEDIA_STALL_TIMEOUT_MS
@@ -15,9 +27,15 @@ import {
   type AudioExclusionClient,
   type AudioExclusionSession
 } from './audio-exclusion'
+import {
+  ensureEncodeProbe,
+  getEncodeCandidates,
+  isForceVp8,
+  subscribeForceVp8
+} from './codec-capabilities'
 import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
-import type { InboundEntry } from './stats-monitor'
+import type { InboundEntry, OutboundEntry, OutboundVideoStats } from './stats-monitor'
 
 export interface StartTransmissionOptions {
   sourceId: string
@@ -43,6 +61,8 @@ export interface LocalTransmission {
   hasAudio: boolean
   audioMode: AudioMode
   stream: MediaStream
+  /** Codec em uso AGORA (muda em rebaixamento/acomodacao). */
+  videoCodec: VideoCodecId
   /** Descarte do writer/port da captura com exclusao (null nos outros modos). */
   stopAudioExclusion: (() => void) | null
 }
@@ -181,6 +201,23 @@ export class MediaManager implements MediaHooks {
   private readonly pullCalls = new Map<string, PullCall>()
   /** txIds que ja tentaram a chamada reversa nesta falha (uma tentativa so). */
   private readonly pullAttempts = new Set<string>()
+  /**
+   * peerId -> quando ESTA maquina viu aquele par no roster pela primeira vez.
+   * E a base da carencia por membro: sem isso, a primeira leitura aconteceria
+   * dentro do `startTransmission` e todo mundo pareceria "recem chegado",
+   * inclusive o par de versao antiga que esta na sala ha dez minutos.
+   */
+  private readonly memberFirstSeenAt = new Map<string, number>()
+  /** Modo nitidez (RF-16..RF-19): escopo de SESSAO, nunca persistido. */
+  private sharpness = false
+  /** peerId -> cadencia do log de codec de saida (RF-21). */
+  private readonly codecLogState = new Map<string, { samples: number; signature: string }>()
+  /** Amostras consecutivas com `qualityLimitationReason === 'cpu'`. */
+  private cpuStreak = 0
+  /** Amostras desde o inicio da transmissao ou desde a ultima troca de codec. */
+  private samplesSinceCodecChange = 0
+  /** Rebaixamentos por CPU nesta transmissao (teto CODEC_MAX_DOWNGRADES). */
+  private downgrades = 0
   private readonly pendingCalls: PendingCall[] = []
   private pendingTimer: ReturnType<typeof setInterval> | null = null
   private readonly streamsListeners = new Set<StreamsListener>()
@@ -192,7 +229,16 @@ export class MediaManager implements MediaHooks {
     private readonly createPullStream: () => PullStream | null = createDummyStream,
     /** Injetavel nos testes: depende de IPC e do breakout box do Chromium. */
     private readonly audioExclusion: AudioExclusionClient = createAudioExclusionClient()
-  ) {}
+  ) {
+    // Ligar o escape durante uma transmissao rebaixa para VP8 na hora. Desligar
+    // NAO promove nada: o codec so desce durante uma transmissao (regra
+    // monotonica); o valor novo vale da proxima transmissao em diante.
+    subscribeForceVp8((value) => {
+      if (value && this.local && this.local.videoCodec !== 'VP8') {
+        this.applyCodecChange('VP8', 'modo compatibilidade')
+      }
+    })
+  }
 
   // --- consulta ------------------------------------------------------------
 
@@ -241,13 +287,157 @@ export class MediaManager implements MediaHooks {
     for (const listener of this.streamsListeners) listener(snapshot)
   }
 
+  // --- escolha de codec ----------------------------------------------------
+
+  /**
+   * Transform do PeerJS, ou `undefined` quando `codec` e null ou 'VP8'.
+   *
+   * VP8 e o que o Chromium ja negocia sozinho hoje: no caminho de base (par de
+   * versao antiga, modo compatibilidade, maquina sem encoder de hardware)
+   * NENHUMA manipulacao de SDP acontece em ponta nenhuma. Isso protege a persona
+   * mais fraca (risco R5) e faz do modo compatibilidade um retorno exato ao
+   * comportamento de hoje.
+   */
+  private codecTransform(codec: VideoCodecId | null): ((sdp: string) => string) | undefined {
+    if (codec === null || codec === 'VP8') return undefined
+    return (sdp: string) => preferVideoCodec(sdp, codec)
+  }
+
+  /**
+   * Registra em `memberFirstSeenAt` todo membro do roster ainda desconhecido e
+   * apaga quem saiu. Roda a CADA tick de 3s, transmitindo ou nao.
+   */
+  private syncMemberSeen(now: number): void {
+    const state = this.session.getState()
+    const current = new Set<string>()
+    for (const member of state.members) {
+      if (member.peerId === state.selfPeerId) continue
+      current.add(member.peerId)
+      if (!this.memberFirstSeenAt.has(member.peerId)) {
+        this.memberFirstSeenAt.set(member.peerId, now)
+      }
+    }
+    for (const peerId of [...this.memberFirstSeenAt.keys()]) {
+      if (!current.has(peerId)) this.memberFirstSeenAt.delete(peerId)
+    }
+  }
+
+  /**
+   * Listas de decodificacao dos OUTROS membros, ja aplicando a CARENCIA POR
+   * MEMBRO: quem nunca anunciou e esta ha menos de `CODEC_MEMBER_GRACE_MS` no
+   * roster fica FORA da lista (ainda pode estar a caminho); passada a carencia,
+   * entra como ['VP8'] para sempre (RF-06).
+   *
+   * `now` e parametro (nao `Date.now()` interno) para o teste ser deterministico.
+   */
+  private memberDecodes(now: number): VideoCodecId[][] {
+    this.syncMemberSeen(now)
+    const state = this.session.getState()
+    const lists: VideoCodecId[][] = []
+    for (const member of state.members) {
+      if (member.peerId === state.selfPeerId) continue
+      const announced = state.decodeCapabilities[member.peerId]
+      if (announced) {
+        lists.push([...announced])
+        continue
+      }
+      const firstSeenAt = this.memberFirstSeenAt.get(member.peerId) ?? now
+      if (now - firstSeenAt >= CODEC_MEMBER_GRACE_MS) lists.push(['VP8'])
+    }
+    return lists
+  }
+
+  /** Melhor codec que esta maquina codifica e que TODA a sala decodifica. */
+  private chooseRoomCodec(now: number): VideoCodecId {
+    return pickRoomCodec(getEncodeCandidates(), this.memberDecodes(now))
+  }
+
+  /**
+   * Troca o codec da transmissao local e refaz as chamadas de saida. Devolve
+   * `true` SO quando a troca aconteceu de fato, para o chamador nunca ter que
+   * adivinhar (e para um rebaixamento que nao aconteceu nao gastar o teto).
+   */
+  private applyCodecChange(next: VideoCodecId, reason: string): boolean {
+    const transmission = this.local
+    if (!transmission || next === transmission.videoCodec) return false
+
+    console.info(
+      `[codec] trocando de ${transmission.videoCodec} para ${next} (${reason}); refazendo as chamadas de saida`
+    )
+    transmission.videoCodec = next
+    this.cpuStreak = 0
+    this.samplesSinceCodecChange = 0
+
+    // As chaves sao copiadas ANTES de iterar: `callPeer` mexe no mapa.
+    for (const peerId of [...this.outgoingCalls.keys()]) this.callPeer(peerId)
+
+    // Reanuncio SILENCIOSO: sem ele o espectador ficaria preso no codec
+    // ABANDONADO e uma chamada reversa dele ofertaria justamente o codec que
+    // este lado acabou de largar. O reducer do outro lado trata TX_START de
+    // transmissao conhecida como atualizacao, sem som e sem toast.
+    for (const peerId of this.session.otherMemberPeerIds()) {
+      this.session.sendTo(peerId, {
+        type: 'TX_START',
+        payload: {
+          txId: transmission.txId,
+          presetId: transmission.presetId,
+          hasAudio: transmission.hasAudio,
+          sourceKind: transmission.sourceKind,
+          sourceLabel: transmission.sourceLabel,
+          startedAt: Date.now(),
+          videoCodec: next
+        }
+      })
+    }
+    return true
+  }
+
+  /**
+   * Rebaixamento por COMPOSICAO DA SALA: alguem entrou (ou anunciou) e o codec
+   * atual ja nao serve a todos. Nunca PROMOVE: subir exigiria refazer as
+   * chamadas para melhorar algo que ja esta funcionando.
+   */
+  private reviewRoomCodec(now: number): boolean {
+    const transmission = this.local
+    if (!transmission) return false
+    const desired = this.chooseRoomCodec(now)
+    const isLower =
+      VIDEO_CODEC_PRIORITY.indexOf(desired) > VIDEO_CODEC_PRIORITY.indexOf(transmission.videoCodec)
+    if (!isLower) return false
+    return this.applyCodecChange(desired, 'sala mudou')
+  }
+
+  /**
+   * Gancho de diagnostico permanente (precedente de `debugDropSignaling`): e o
+   * unico jeito honesto de exercitar o redial sem uma CPU realmente saturada.
+   */
+  debugDowngradeCodec(): void {
+    const now = Date.now()
+    const current = this.local?.videoCodec ?? 'VP8'
+    const next = nextLowerCodec(current, getEncodeCandidates(), this.memberDecodes(now))
+    if (next === null) {
+      console.info('[codec] nao ha degrau abaixo do codec atual')
+      return
+    }
+    this.applyCodecChange(next, 'diagnostico')
+  }
+
   // --- transmissao local ---------------------------------------------------
 
   /** RF-16/RF-17/RF-18: inicia a unica transmissao local permitida. */
   async startTransmission(options: StartTransmissionOptions): Promise<LocalTransmission> {
     if (this.local) throw new TransmissionInProgressError()
+    // RF-19: toda transmissao nova comeca com o modo nitidez DESLIGADO.
+    this.sharpness = false
+    this.cpuStreak = 0
+    this.samplesSinceCodecChange = 0
+    this.downgrades = 0
 
     const preset = PRESETS[options.presetId]
+    // A sonda de codificacao depende do preset escolhido e e aguardada: quem
+    // escolhe o codec da sala precisa da lista pronta. Cacheada por preset, na
+    // pior hipotese resolve com ['VP8'].
+    await ensureEncodeProbe(options.presetId)
 
     // A exclusao e armada ANTES da captura de video: com ela ativa o audio nao
     // vem mais do getDisplayMedia, e sim da nossa track gerada.
@@ -317,9 +507,11 @@ export class MediaManager implements MediaHooks {
       hasAudio,
       audioMode: !options.withAudio ? 'none' : exclusion ? 'excluded' : 'full-loopback',
       stream,
+      videoCodec: this.chooseRoomCodec(Date.now()),
       stopAudioExclusion: exclusion ? () => exclusion.stop() : null
     }
     this.local = transmission
+    console.info(`[codec] transmissao ${transmission.txId} vai sair em ${transmission.videoCodec}`)
 
     // Anuncia primeiro para que o TX_START chegue antes ou junto do `call`.
     this.session.announceTransmissionStart({
@@ -327,7 +519,8 @@ export class MediaManager implements MediaHooks {
       presetId: transmission.presetId,
       hasAudio: transmission.hasAudio,
       sourceKind: transmission.sourceKind,
-      sourceLabel: transmission.sourceLabel
+      sourceLabel: transmission.sourceLabel,
+      videoCodec: transmission.videoCodec
     })
 
     for (const peerId of this.session.otherMemberPeerIds()) {
@@ -343,6 +536,11 @@ export class MediaManager implements MediaHooks {
     const transmission = this.local
     if (!transmission) return
     this.local = null
+    this.sharpness = false
+    this.codecLogState.clear()
+    this.cpuStreak = 0
+    this.samplesSinceCodecChange = 0
+    this.downgrades = 0
 
     for (const outgoing of this.outgoingCalls.values()) {
       outgoing.disposeIce()
@@ -356,6 +554,42 @@ export class MediaManager implements MediaHooks {
     this.notifyStreams()
   }
 
+  /**
+   * RF-16..RF-19: liga/desliga o modo nitidez AO VIVO, sem parar a transmissao.
+   * Ligado, a imagem prefere manter RESOLUCAO (texto legivel) e sacrifica taxa
+   * de quadros; desligado volta ao padrao de movimento. Idempotente.
+   */
+  setSharpnessMode(on: boolean): void {
+    if (!this.local) {
+      this.sharpness = on
+      return
+    }
+    this.sharpness = on
+
+    const videoTrack = this.local.stream.getVideoTracks()[0]
+    if (videoTrack) videoTrack.contentHint = on ? 'detail' : 'motion'
+
+    for (const outgoing of this.outgoingCalls.values()) {
+      const connection = outgoing.call.peerConnection
+      if (!connection) continue
+      const videoSender = connection.getSenders().find((sender) => sender.track?.kind === 'video')
+      if (!videoSender) continue
+      const parameters = videoSender.getParameters()
+      // Nada de mexer em `encodings` aqui: bitrate e framerate sao do preset.
+      parameters.degradationPreference = on ? 'maintain-resolution' : 'maintain-framerate'
+      videoSender.setParameters(parameters).catch((error: unknown) => {
+        console.warn('[media] falha ao aplicar o modo nitidez:', error)
+      })
+    }
+
+    console.info(`[codec] modo nitidez ${on ? 'ligado' : 'desligado'}`)
+  }
+
+  /** Estado corrente do modo nitidez (sempre false fora de transmissao). */
+  isSharpnessMode(): boolean {
+    return this.sharpness
+  }
+
   /** RF-19: trocar fonte = parar a atual e comecar a nova. */
   async switchSource(options: StartTransmissionOptions): Promise<LocalTransmission> {
     this.stopTransmission('source_switch')
@@ -367,9 +601,12 @@ export class MediaManager implements MediaHooks {
     if (!transmission) return
     this.closeOutgoing(peerId)
     try {
-      const call = this.session.callPeer(peerId, transmission.stream, {
-        txId: transmission.txId
-      })
+      const call = this.session.callPeer(
+        peerId,
+        transmission.stream,
+        { txId: transmission.txId },
+        this.codecTransform(transmission.videoCodec)
+      )
       this.outgoingCalls.set(peerId, {
         call,
         disposeIce: observePeerJsIce(call, `media-out:${shortPeerId(peerId)}`)
@@ -389,6 +626,7 @@ export class MediaManager implements MediaHooks {
   /** Encerra a chamada de saida de um par e o diagnostico dela. */
   private closeOutgoing(peerId: string): void {
     const outgoing = this.outgoingCalls.get(peerId)
+    this.codecLogState.delete(peerId)
     if (!outgoing) return
     this.outgoingCalls.delete(peerId)
     outgoing.disposeIce()
@@ -422,7 +660,9 @@ export class MediaManager implements MediaHooks {
         encoding.maxBitrate = preset.maxBitrate
         encoding.maxFramerate = preset.frameRate
       }
-      parameters.degradationPreference = 'maintain-framerate'
+      // Quem entra depois (membro novo, redial de rebaixamento) herda o modo
+      // nitidez corrente sem que ninguem precise reaplicar nada.
+      parameters.degradationPreference = this.sharpness ? 'maintain-resolution' : 'maintain-framerate'
       videoSender.setParameters(parameters).catch((error: unknown) => {
         console.warn('[media] falha ao aplicar parametros do sender:', error)
       })
@@ -446,7 +686,8 @@ export class MediaManager implements MediaHooks {
         hasAudio: transmission.hasAudio,
         sourceKind: transmission.sourceKind,
         sourceLabel: transmission.sourceLabel,
-        startedAt: Date.now()
+        startedAt: Date.now(),
+        videoCodec: transmission.videoCodec
       }
     })
     this.callPeer(peerId)
@@ -585,9 +826,19 @@ export class MediaManager implements MediaHooks {
     const dummy = this.createPullStream()
     if (!dummy) return
 
+    // Aqui quem OFERTA e o espectador, e no WebRTC quem envia escolhe o codec a
+    // partir da descricao REMOTA: sem repetir o codec da transmissao na oferta,
+    // o transmissor cairia no default do Chromium (VP8).
+    const wanted = isForceVp8() ? 'VP8' : (state.transmissions[txId]?.videoCodec ?? null)
+
     let call: MediaConnection
     try {
-      call = this.session.callPeer(txPeerId, dummy.stream, { txId, pull: true })
+      call = this.session.callPeer(
+        txPeerId,
+        dummy.stream,
+        { txId, pull: true },
+        this.codecTransform(wanted)
+      )
     } catch (error) {
       console.warn(`[media] nao foi possivel puxar a transmissao ${txId}:`, error)
       stopTracks(dummy.stream)
@@ -625,7 +876,12 @@ export class MediaManager implements MediaHooks {
     // A oferta da reversa tem m-line de video E de audio: vai a transmissao
     // inteira. Sem audio na captura (hasAudio false) o m-line de audio fica
     // vazio e a chamada segue so com video, como antes.
-    call.answer(transmission.stream)
+    // Simetria defensiva barata: munjir a propria resposta nao dirige o que o
+    // transmissor ENVIA (isso quem dita e a oferta do outro lado), mas ajuda se
+    // o outro lado nao for Chromium.
+    call.answer(transmission.stream, {
+      sdpTransform: this.codecTransform(transmission.videoCodec)
+    })
     call.on('close', () => {
       if (this.outgoingCalls.get(peerId)?.call === call) this.closeOutgoing(peerId)
     })
@@ -769,6 +1025,72 @@ export class MediaManager implements MediaHooks {
     return entries
   }
 
+  /**
+   * Conexoes de SAIDA da transmissao local, etiquetadas por par (RF-11/RF-21).
+   * Vazio sem transmissao local: o monitor nao faz nenhum `getStats()` a toa.
+   */
+  outboundEntries(): OutboundEntry[] {
+    const transmission = this.local
+    if (!transmission) return []
+    const entries: OutboundEntry[] = []
+    for (const [peerId, outgoing] of this.outgoingCalls.entries()) {
+      const connection = outgoing.call.peerConnection
+      if (connection) entries.push({ peerId, txId: transmission.txId, connection })
+    }
+    return entries
+  }
+
+  /**
+   * Amostra de saida do MESMO tick de 3s do monitor de qualidade (RNF-07).
+   * A primeira linha vale SEMPRE, transmitindo ou nao: este tick e o relogio que
+   * alimenta o mapa de membros vistos, base da carencia por membro.
+   */
+  onOutboundVideoStats(stats: ReadonlyMap<string, OutboundVideoStats>): void {
+    this.syncMemberSeen(Date.now())
+    if (!this.local) return
+
+    for (const [peerId, entry] of stats) {
+      const signature = `${entry.codec}|${entry.encoderImplementation}|${entry.qualityLimitationReason}`
+      const previous = this.codecLogState.get(peerId)
+      const samples = previous ? previous.samples : 0
+      if (!previous || previous.signature !== signature || samples % CODEC_LOG_EVERY_N_SAMPLES === 0) {
+        console.info(
+          `[codec] envio ${shortPeerId(peerId)}: ${entry.codec ?? 'desconhecido'} impl=${entry.encoderImplementation ?? 'desconhecida'} fps=${entry.framesPerSecond ?? '?'} limite=${entry.qualityLimitationReason ?? 'nenhum'}`
+        )
+      }
+      this.codecLogState.set(peerId, { samples: samples + 1, signature })
+    }
+
+    this.samplesSinceCodecChange += 1
+    const now = Date.now()
+
+    // Composicao da sala primeiro: se ela ja trocou o codec, o tick acaba aqui
+    // (a troca zerou os contadores do watcher de cpu).
+    if (this.reviewRoomCodec(now)) return
+
+    // Aquecimento: o arranque do encoder produz 'cpu' transitorio.
+    if (this.samplesSinceCodecChange <= CODEC_CPU_WARMUP_SAMPLES) return
+
+    let cpuLimited = false
+    for (const entry of stats.values()) {
+      if (entry.qualityLimitationReason === 'cpu') cpuLimited = true
+    }
+    // Uma amostra que NAO e de cpu zera a contagem: esse e o anti-flapping.
+    this.cpuStreak = cpuLimited ? this.cpuStreak + 1 : 0
+
+    if (this.cpuStreak < CODEC_CPU_PERSISTENT_SAMPLES) return
+    if (this.downgrades >= CODEC_MAX_DOWNGRADES) return
+
+    const next = nextLowerCodec(
+      this.local.videoCodec,
+      getEncodeCandidates(),
+      this.memberDecodes(now)
+    )
+    // Ja em VP8 (ou sem degrau que sirva a sala): nada a fazer, e correto.
+    if (next === null) return
+    if (this.applyCodecChange(next, 'cpu limitada')) this.downgrades += 1
+  }
+
   /** Remove uma transmissao remota que saiu do roster/parou. */
   dropRemote(txId: string): void {
     this.stopIncomingWatch(txId)
@@ -800,6 +1122,15 @@ export class MediaManager implements MediaHooks {
     }
     this.outgoingCalls.clear()
     this.remoteStreams.clear()
+    // Saida da sala: o mapa de "visto pela primeira vez" so morre AQUI. Limpar
+    // no `stopTransmission` faria a transmissao seguinte enxergar todo mundo
+    // como recem chegado e ignorar de novo o par de versao antiga.
+    this.memberFirstSeenAt.clear()
+    this.sharpness = false
+    this.codecLogState.clear()
+    this.cpuStreak = 0
+    this.samplesSinceCodecChange = 0
+    this.downgrades = 0
     if (this.local) {
       this.local.stream.getTracks().forEach((track) => track.stop())
       this.local.stopAudioExclusion?.()
@@ -812,3 +1143,16 @@ export class MediaManager implements MediaHooks {
 /** Instancia unica ligada a sessao do app. */
 export const mediaManager = new MediaManager(session)
 session.setMediaHooks(mediaManager)
+
+/**
+ * Gancho de DIAGNOSTICO do caminho de midia (mesmo espirito de
+ * `__zoiDebug.dropSignaling`). Vive aqui porque `session.ts` nao importa o
+ * mediaManager: a dependencia e ao contrario.
+ * Uso: `__zoiDebugMedia.sharpness(true)` no DevTools.
+ */
+if (typeof window !== 'undefined') {
+  ;(window as unknown as { __zoiDebugMedia: unknown }).__zoiDebugMedia = {
+    sharpness: (on: boolean) => mediaManager.setSharpnessMode(on),
+    downgrade: () => mediaManager.debugDowngradeCodec()
+  }
+}
