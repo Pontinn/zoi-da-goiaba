@@ -2,6 +2,11 @@
 // Recebe mensagens ja validadas + eventos locais de transporte e devolve o novo
 // estado mais uma lista de EFEITOS declarativos que a camada de servicos executa.
 // Nenhum import de PeerJS, DOM ou Electron: 100% testavel.
+import {
+  isVideoCodecId,
+  normalizeDecodeAnnouncement,
+  type VideoCodecId
+} from '@shared/codecs'
 import { HELLO_QUARANTINE_MS } from '@shared/config'
 import type { SoundId } from '@shared/sounds'
 import {
@@ -49,6 +54,8 @@ export interface TransmissionState {
   sourceLabel: string
   startedAt: number
   status: TransmissionStatus
+  /** Codec anunciado pelo transmissor; null = versao antiga ou nao informado. */
+  videoCodec: VideoCodecId | null
 }
 
 export interface QualitySample {
@@ -82,6 +89,8 @@ export interface RoomState {
   selfWatchingTxId: string | null
   /** peerId -> ultima amostra de qualidade (RF-38). */
   quality: Record<string, QualitySample>
+  /** peerId -> codecs que ele anunciou decodificar bem (RF-05). */
+  decodeCapabilities: Record<string, VideoCodecId[]>
   /** peerId -> estado do link de mesh. */
   peerLinks: Record<string, PeerLink>
   pendingHellos: PendingHello[]
@@ -104,6 +113,7 @@ export function createInitialState(selfPeerId = '', selfInstallId = ''): RoomSta
     watching: {},
     selfWatchingTxId: null,
     quality: {},
+    decodeCapabilities: {},
     peerLinks: {},
     pendingHellos: [],
     announcedPeers: []
@@ -230,6 +240,8 @@ export interface LocalQualityEvent {
   level: QualityLevel
   rttMs: number
   inboundBitrateKbps: number | null
+  /** O que ESTA maquina decodifica bem, anunciado de carona no mesmo tick. */
+  decodes: VideoCodecId[]
   now: number
 }
 
@@ -564,7 +576,8 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
         sourceKind: payload.sourceKind,
         sourceLabel: payload.sourceLabel,
         startedAt: payload.startedAt,
-        status: 'live'
+        status: 'live',
+        videoCodec: isVideoCodecId(payload.videoCodec) ? payload.videoCodec : null
       }
       const selfWatchingTxId = previous.includes(state.selfWatchingTxId ?? '')
         ? null
@@ -623,9 +636,20 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
 
     case 'QUALITY_UPDATE': {
       if (!senderIsMember) return rejectFrom(state, from, senderIsMember, 'QUALITY_UPDATE')
+      // Anuncio de capacidade de decodificacao (RF-05). Sem o campo (par de
+      // versao ANTIGA) a entrada NAO e criada: a ausencia e o que da direito a
+      // carencia por membro no consumidor, que depois passa a ler ['VP8'].
+      const decodeCapabilities =
+        message.payload.decodes === undefined
+          ? state.decodeCapabilities
+          : {
+              ...state.decodeCapabilities,
+              [from]: normalizeDecodeAnnouncement(message.payload.decodes)
+            }
       return {
         state: {
           ...state,
+          decodeCapabilities,
           quality: {
             ...state.quality,
             [from]: {
@@ -918,6 +942,7 @@ function applySnapshot(
     selfWatchingTxId,
     watching: withoutKeys(state.watching, removedPeerIds),
     quality: withoutKeys(state.quality, removedPeerIds),
+    decodeCapabilities: withoutKeys(state.decodeCapabilities, removedPeerIds),
     peerLinks,
     pendingHellos: stillPending,
     announcedPeers: change.announcedPeers
@@ -1141,6 +1166,7 @@ function applyOwnerTimeout(state: RoomState, ownerPeerId: string, now: number): 
     transmissions,
     watching: withoutKeys(state.watching, [ownerPeerId]),
     quality: withoutKeys(state.quality, [ownerPeerId]),
+    decodeCapabilities: withoutKeys(state.decodeCapabilities, [ownerPeerId]),
     peerLinks: withoutKeys(timedOut.peerLinks, [ownerPeerId])
   }
   return {
@@ -1277,6 +1303,7 @@ function removeMemberAsOwner(
     transmissions,
     watching: withoutKeys(state.watching, [peerId]),
     quality: withoutKeys(state.quality, [peerId]),
+    decodeCapabilities: withoutKeys(state.decodeCapabilities, [peerId]),
     peerLinks: withoutKeys(state.peerLinks, [peerId]),
     announcedPeers: state.announcedPeers.filter((announced) => announced !== peerId),
     selfWatchingTxId: transmissions[state.selfWatchingTxId ?? ''] ? state.selfWatchingTxId : null
@@ -1353,7 +1380,8 @@ function applyLocalTxStart(state: RoomState, event: LocalTxStartEvent): ReducerR
     sourceKind: event.sourceKind,
     sourceLabel: event.sourceLabel,
     startedAt: event.now,
-    status: 'live'
+    status: 'live',
+    videoCodec: null
   }
   return {
     state: { ...state, transmissions },
@@ -1423,7 +1451,8 @@ function applyLocalQuality(state: RoomState, event: LocalQualityEvent): ReducerR
           payload: {
             level: event.level,
             rttMs: event.rttMs,
-            inboundBitrateKbps: event.inboundBitrateKbps
+            inboundBitrateKbps: event.inboundBitrateKbps,
+            decodes: event.decodes
           }
         }
       }

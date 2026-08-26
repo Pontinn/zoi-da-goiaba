@@ -39,7 +39,7 @@ import {
   type RoomState,
   type ToastTone
 } from '../core/room-state'
-import { describeCodecProbe } from './codec-capabilities'
+import { describeCodecProbe, getLocalDecodeCodecs } from './codec-capabilities'
 import { describeConnectionState, observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { Mesh } from './mesh'
 import {
@@ -274,6 +274,9 @@ export class Session {
           level: report.level,
           rttMs: report.rttMs,
           inboundBitrateKbps: report.inboundBitrateKbps,
+          // Carona do anuncio de codec (RF-05): TODO membro ja manda este
+          // broadcast a cada 3s, inclusive quem nunca transmite.
+          decodes: getLocalDecodeCodecs(),
           now: Date.now()
         })
       }
@@ -1151,6 +1154,7 @@ if (typeof window !== 'undefined') {
     dropSignaling: (target?: 'door' | 'member' | 'both') => session.debugDropSignaling(target),
     checkHealth: () => session.checkSignalingHealth(),
     health: () => session.getHealth(),
-    codecs: () => describeCodecProbe()
+    codecs: () => describeCodecProbe(),
+    codecRoom: () => session.getState().decodeCapabilities
   }
 }

@@ -142,7 +142,8 @@ function stateWithTransmission(): RoomState {
         sourceKind: 'screen',
         sourceLabel: 'Tela 1',
         startedAt: 0,
-        status: 'live'
+        status: 'live',
+        videoCodec: null
       }
     }
   }
@@ -258,7 +259,8 @@ function stateTransmittingLocally(): RoomState {
         sourceKind: 'screen',
         sourceLabel: 'Tela 1',
         startedAt: 0,
-        status: 'live'
+        status: 'live',
+        videoCodec: null
       }
     }
   }
