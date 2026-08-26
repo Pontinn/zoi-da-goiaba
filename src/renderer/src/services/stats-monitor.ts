@@ -15,12 +15,35 @@ export interface QualityReport {
   inboundBitrateKbps: number | null
 }
 
+/** Conexao de entrada ETIQUETADA pela transmissao que ela carrega. */
+export interface InboundEntry {
+  txId: string
+  connection: RTCPeerConnection
+}
+
+/**
+ * Contadores de quadro de UMA transmissao recebida, lidos do `inbound-rtp` de
+ * video no MESMO tick do agregado de qualidade (RNF-05: nenhum segundo laco).
+ *
+ * Ponto de extensao da video-codec-upgrade: campos novos do mesmo report
+ * inbound-rtp (ex.: decoderImplementation) entram AQUI; leitura do lado de saida
+ * ganha um outboundEntries simetrico neste MESMO monitor, nunca um coletor
+ * paralelo.
+ */
+export interface InboundVideoStats {
+  framesDecoded: number
+  framesReceived: number
+  at: number
+}
+
 export interface StatsMonitorCallbacks {
-  /** Conexoes de entrada a inspecionar (uma por transmissao recebida). */
-  inboundConnections(): RTCPeerConnection[]
+  /** Conexoes de entrada a inspecionar, uma por transmissao recebida. */
+  inboundEntries(): InboundEntry[]
   /** Media dos RTTs de heartbeat conhecidos. */
   averageRttMs(): number
   onReport(report: QualityReport): void
+  /** Contadores por transmissao. Opcional: o monitor roda sem consumidor. */
+  onInboundVideoStats?(stats: ReadonlyMap<string, InboundVideoStats>): void
 }
 
 interface InboundSample {
@@ -60,27 +83,42 @@ export class StatsMonitor {
   }
 
   private async sample(): Promise<void> {
-    const connections = this.callbacks.inboundConnections()
+    const connections = this.callbacks.inboundEntries()
     const rttMs = Math.round(this.callbacks.averageRttMs())
+    const sampledAt = Date.now()
 
     let bytes = 0
     let packetsLost = 0
     let packetsReceived = 0
+    const perTx = new Map<string, InboundVideoStats>()
 
-    for (const connection of connections) {
+    for (const inbound of connections) {
       try {
-        const stats = await connection.getStats()
+        const stats = await inbound.connection.getStats()
         stats.forEach((report) => {
           if (report.type !== 'inbound-rtp') return
           const entry = report as RTCInboundRtpStreamStats
           bytes += entry.bytesReceived ?? 0
           packetsLost += entry.packetsLost ?? 0
           packetsReceived += entry.packetsReceived ?? 0
+          // Contadores de quadro (RF-03): so o report de VIDEO desta conexao, que
+          // corresponde a exatamente uma transmissao (incomingCalls por txId).
+          if (entry.kind !== 'video') return
+          const framesDecoded = entry.framesDecoded ?? 0
+          const previous = perTx.get(inbound.txId)
+          if (previous && previous.framesDecoded >= framesDecoded) return
+          perTx.set(inbound.txId, {
+            framesDecoded,
+            framesReceived: entry.framesReceived ?? 0,
+            at: sampledAt
+          })
         })
       } catch (error) {
         console.warn('[stats] falha ao coletar getStats:', error)
       }
     }
+
+    this.callbacks.onInboundVideoStats?.(perTx)
 
     const now = Date.now()
     let inboundBitrateKbps: number | null = null

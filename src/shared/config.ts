@@ -109,6 +109,27 @@ export const ICE_DISCONNECTED_REPORT_AFTER_MS = 5_000
  */
 export const MEDIA_STALL_TIMEOUT_MS = 10_000
 
+/**
+ * Espera do PRIMEIRO quadro no player, do lado de quem assiste (RF-01/RF-05).
+ *
+ * `FIRST_FRAME_GRACE_MS`: carencia antes de mostrar qualquer aviso. Abertura
+ * saudavel entrega quadro bem antes disso, entao esperar 1,5s evita um aviso que
+ * pisca e some no caminho feliz.
+ *
+ * `FIRST_FRAME_ESCALATE_MS`: tempo EFETIVO total (descontadas as pausas) ate o
+ * segundo estagio do aviso. Deliberadamente maior que `MEDIA_STALL_TIMEOUT_MS`:
+ * uma falha tecnica de midia vira o overlay de falha antes disso; quem chega aqui
+ * e quem nao falhou, so ainda nao pintou nenhum quadro.
+ *
+ * `WAITING_MIN_VISIBLE_MS`: tempo minimo que o aviso, uma vez VISIVEL, permanece
+ * na tela antes de a saida comecar. Sem ele, um quadro chegando em ~1,6s faria o
+ * aviso aparecer e sumir em ~100ms, um flash que le como defeito da interface.
+ * Nunca atrasa o video: o que espera e apenas o veu escuro do overlay.
+ */
+export const FIRST_FRAME_GRACE_MS = 1_500
+export const FIRST_FRAME_ESCALATE_MS = 12_000
+export const WAITING_MIN_VISIBLE_MS = 300
+
 /** Debounce do WATCHING_UPDATE ao alternar rapidamente entre streams. */
 export const WATCHING_UPDATE_DEBOUNCE_MS = 300
 

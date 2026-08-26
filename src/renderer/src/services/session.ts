@@ -49,7 +49,7 @@ import {
   type DoorHealth
 } from './peer-manager'
 import { ReconnectionManager } from './reconnection'
-import { StatsMonitor } from './stats-monitor'
+import { StatsMonitor, type InboundEntry, type InboundVideoStats } from './stats-monitor'
 import { playSound } from './sound-player'
 
 export class JoinRejectedError extends Error {
@@ -130,8 +130,8 @@ export interface MediaHooks {
   dropRemote(txId: string): void
   /** Encerra a transmissao local (saida da sala, troca de fonte). */
   stopLocal(reason: TxStopReason): void
-  /** Conexoes de ENTRADA para o monitor de qualidade. */
-  inboundConnections(): RTCPeerConnection[]
+  /** Conexoes de ENTRADA, etiquetadas por txId, para o monitor de qualidade. */
+  inboundEntries(): InboundEntry[]
   /** Libera tudo ao destruir a sessao. */
   teardown(): void
 }
@@ -178,7 +178,7 @@ const noopMediaHooks: MediaHooks = {
   onIncomingCall: (call) => call.close(),
   dropRemote: () => {},
   stopLocal: () => {},
-  inboundConnections: () => [],
+  inboundEntries: () => [],
   teardown: () => {}
 }
 
@@ -192,6 +192,9 @@ export class Session {
   private readonly toastListeners = new Set<ToastListener>()
   private readonly healthListeners = new Set<HealthListener>()
   private readonly memberErrorListeners = new Set<(type: string, message: string) => void>()
+  private readonly inboundVideoStatsListeners = new Set<
+    (stats: ReadonlyMap<string, InboundVideoStats>) => void
+  >()
   private readonly rttByPeer = new Map<string, number>()
 
   private health: SessionHealth = { signaling: 'up', door: 'closed' }
@@ -260,8 +263,9 @@ export class Session {
     })
 
     this.statsMonitor = new StatsMonitor({
-      inboundConnections: () => this.mediaHooks.inboundConnections(),
+      inboundEntries: () => this.mediaHooks.inboundEntries(),
       averageRttMs: () => this.averageRtt(),
+      onInboundVideoStats: (stats) => this.notifyInboundVideoStats(stats),
       onReport: (report) => {
         if (this.state.phase !== 'active') return
         this.dispatch({
@@ -305,6 +309,18 @@ export class Session {
     this.healthListeners.add(listener)
     listener(this.health)
     return () => this.healthListeners.delete(listener)
+  }
+
+  /**
+   * Assina os contadores de quadro por transmissao, publicados pelo mesmo tick de
+   * 3s do monitor de qualidade. Leitura passiva: nada aqui muda comportamento de
+   * conexao.
+   */
+  onInboundVideoStats(
+    listener: (stats: ReadonlyMap<string, InboundVideoStats>) => void
+  ): () => void {
+    this.inboundVideoStatsListeners.add(listener)
+    return () => this.inboundVideoStatsListeners.delete(listener)
   }
 
   /**
@@ -1046,6 +1062,10 @@ export class Session {
     for (const listener of this.healthListeners) listener(this.health)
   }
 
+  private notifyInboundVideoStats(stats: ReadonlyMap<string, InboundVideoStats>): void {
+    for (const listener of this.inboundVideoStatsListeners) listener(stats)
+  }
+
   private startBackgroundTimers(): void {
     this.statsMonitor.start()
     // Queda silenciosa do websocket (servidor derruba ocioso, maquina dorme):
@@ -1099,6 +1119,9 @@ export class Session {
       this.quarantineTimer = null
     }
     this.statsMonitor.stop()
+    // Zera os consumidores por transmissao: sem isso o ultimo mapa ficaria
+    // pendurado depois que as conexoes de entrada ja morreram.
+    this.notifyInboundVideoStats(new Map())
     this.reconnection.destroy()
     this.mediaHooks.teardown()
     this.mesh.closeAll()

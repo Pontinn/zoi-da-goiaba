@@ -180,6 +180,81 @@
   color: var(--warning);
 }
 
+/* --- Aviso de espera do primeiro quadro (terceiro irmao da familia) --------- */
+
+/*
+ * Momento 1 (entrada): o cartao ja entra com o `z-fade-in` da base `.z-reconnect`.
+ * A logo entra com o MESMO bounce do card de status (unica excecao de easing do
+ * app), com 60ms de atraso para nao competir com o fade do cartao. O pulso do
+ * momento 2 fica no WRAP e o bounce na IMG: tirar a classe de pulso na escalada
+ * nao reinicia o bounce da logo.
+ */
+.z-waiting__logo {
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+  animation: z-status-bounce-in 480ms cubic-bezier(0.34, 1.56, 0.64, 1) 60ms both;
+}
+
+/*
+ * Momento 2 (indicador vivo): pulso SO de opacity, apenas no primeiro estagio, e
+ * desmontado junto com o overlay (nunca escondido rodando). O atraso de 1200ms
+ * deixa o bounce terminar antes do primeiro vale.
+ */
+.z-waiting__logo-wrap--pulse {
+  animation: z-waiting-pulse 2s ease-in-out 1200ms infinite;
+}
+
+/*
+ * Momento 1 (entrada do texto): animacao UNICA no container, que monta junto com
+ * o cartao. Transition nao serviria: transition nao roda no mount inicial, e o
+ * estagio ativo ja nasce com a classe ativa. Nao conflita com o crossfade do
+ * momento 3, que e transition nos FILHOS.
+ */
+.z-reconnect--waiting .z-waiting__swap {
+  animation: z-fade-rise 220ms var(--ease) 160ms both;
+}
+
+/*
+ * Momento 3 (crossfade dos 12s): os dois estagios ocupam a MESMA celula do grid.
+ * O ativo funde para dentro enquanto o outro funde para fora, sobreposicao real,
+ * sem pulo de layout (o container assume a altura do maior filho). O bounce fica
+ * reservado a logo: aqui o easing e o padrao do app.
+ */
+.z-waiting__swap {
+  display: grid;
+  justify-items: center;
+}
+
+.z-waiting__stage {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity var(--dur-enter) var(--ease),
+    transform var(--dur-enter) var(--ease);
+  pointer-events: none;
+}
+
+.z-waiting__stage--active {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/*
+ * Momento 4 (saida): keyframe de NOME NOVO. A base ja terminou `z-fade-in ...
+ * both`: uma transition seria vencida pelo fill da animation, e reaplicar o
+ * mesmo nome com `reverse` nao reiniciaria nada (saltaria para opacity 0, o
+ * corte seco proibido). Saida discreta, so opacity, sem scale nem translate.
+ */
+.z-reconnect--waiting-exit {
+  animation: z-fade-out var(--dur-enter) var(--ease) both;
+}
+
 /* --- Faixa de outras transmissoes ------------------------------------------ */
 
 .z-strip {

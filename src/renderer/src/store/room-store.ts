@@ -6,6 +6,7 @@ import { QUALITY_STALE_MS, WATCHING_UPDATE_DEBOUNCE_MS } from '@shared/config'
 import { createInitialState, type RoomState } from '../core/room-state'
 import { mediaManager, type LocalTransmission } from '../services/media-manager'
 import { session, type SessionHealth } from '../services/session'
+import type { InboundVideoStats } from '../services/stats-monitor'
 
 export interface RoomStore {
   room: RoomState
@@ -19,6 +20,12 @@ export interface RoomStore {
   qualityTick: number
   /** Transmissao aberta no player. Muda na hora; o broadcast vai com debounce. */
   selectedTxId: string | null
+  /**
+   * Contadores de quadro por transmissao; prova "decodificado" do aviso de
+   * espera e insumo da video-codec-upgrade. Republicado a cada tick de 3s do
+   * monitor de qualidade, sem nenhum laco proprio.
+   */
+  inboundVideoStats: ReadonlyMap<string, InboundVideoStats>
 }
 
 export const useRoomStore = create<RoomStore>(() => ({
@@ -28,7 +35,8 @@ export const useRoomStore = create<RoomStore>(() => ({
   localTx: null,
   health: session.getHealth(),
   qualityTick: 0,
-  selectedTxId: null
+  selectedTxId: null,
+  inboundVideoStats: new Map()
 }))
 
 let watchTimer: ReturnType<typeof setTimeout> | null = null
@@ -73,6 +81,10 @@ export function attachRoomStore(): () => void {
     useRoomStore.setState({ mediaFailures })
   })
 
+  const unsubscribeVideoStats = session.onInboundVideoStats((inboundVideoStats) => {
+    useRoomStore.setState({ inboundVideoStats })
+  })
+
   const unsubscribeHealth = session.onHealth((health) => {
     useRoomStore.setState({ health })
   })
@@ -85,6 +97,7 @@ export function attachRoomStore(): () => void {
     unsubscribeSession()
     unsubscribeStreams()
     unsubscribeFailures()
+    unsubscribeVideoStats()
     unsubscribeHealth()
     clearInterval(tick)
   }

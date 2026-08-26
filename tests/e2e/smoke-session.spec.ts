@@ -83,6 +83,30 @@ test.describe('smoke de sessao (2 instancias)', () => {
     await expect(guest.page.getByTestId('player')).toBeVisible({ timeout: TIMEOUTS.media })
     await expect(guest.page.getByTestId('player-preset')).toHaveText('720p30')
 
+    // 8b. Com o video fluindo, o aviso de espera do primeiro quadro esta
+    //     AUSENTE neste estado final do caminho feliz (uma presenca transitoria
+    //     anterior, amortecida pela carencia, seria aceitavel e nao e negada
+    //     aqui). Junto com os outros dois overlays ausentes, e a precedencia
+    //     RF-08 conferida no app buildado.
+    const watching = guest
+    await expect(guest.page.getByTestId('waiting-overlay')).toHaveCount(0, {
+      timeout: TIMEOUTS.media
+    })
+    await expect(guest.page.getByTestId('reconnect-overlay')).toHaveCount(0)
+    await expect(guest.page.getByTestId('media-failure')).toHaveCount(0)
+
+    // 8c. O instrumento de diagnostico saiu de verdade (RF-16/AC-14): a linha
+    //     do tempo ate o primeiro quadro aparece no console do renderer, que o
+    //     file-logger do main ja espelha no arquivo do dia.
+    await expect
+      .poll(
+        () =>
+          watching.consoleLines.filter((line) => line.includes('[player] primeiro quadro'))
+            .length,
+        { timeout: TIMEOUTS.media }
+      )
+      .toBeGreaterThan(0)
+
     // 9. Controles somem sozinhos sem atividade e voltam ao mexer o mouse
     //    (RNF-07). O auto-hide e por classe, o elemento continua no DOM.
     const controls = guest.page.getByTestId('player-controls')

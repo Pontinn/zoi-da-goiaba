@@ -17,6 +17,7 @@ import {
 } from './audio-exclusion'
 import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
+import type { InboundEntry } from './stats-monitor'
 
 export interface StartTransmissionOptions {
   sourceId: string
@@ -754,13 +755,18 @@ export class MediaManager implements MediaHooks {
     this.stopTransmission(reason)
   }
 
-  /** Conexoes de ENTRADA para o monitor de qualidade (RF-38). */
-  inboundConnections(): RTCPeerConnection[] {
-    const connections: RTCPeerConnection[] = []
-    for (const call of this.incomingCalls.values()) {
-      if (call.peerConnection) connections.push(call.peerConnection)
+  /**
+   * Conexoes de ENTRADA para o monitor de qualidade (RF-38), ETIQUETADAS pela
+   * transmissao: cada chamada de entrada corresponde a exatamente um txId, e a
+   * etiqueta e o que permite ler contadores de quadro por transmissao sem um
+   * segundo laco de `getStats()`. Leitura passiva: nao decide nada de conexao.
+   */
+  inboundEntries(): InboundEntry[] {
+    const entries: InboundEntry[] = []
+    for (const [txId, call] of this.incomingCalls.entries()) {
+      if (call.peerConnection) entries.push({ txId, connection: call.peerConnection })
     }
-    return connections
+    return entries
   }
 
   /** Remove uma transmissao remota que saiu do roster/parou. */
