@@ -3,6 +3,7 @@ import { PRESET_LIST } from '@shared/presets'
 import {
   createEnvelope,
   isEnvelope,
+  isQualityUpdatePayload,
   isRosterMember,
   isRosterUpdatePayload,
   isTxStartPayload,
@@ -215,5 +216,61 @@ describe('protocol / type guards de entidades', () => {
     }
     expect(isTxStartPayload({ ...base, presetId: 'p1080_30_hq' })).toBe(true)
     expect(isTxStartPayload({ ...base, presetId: 'p1080_60_hq' })).toBe(true)
+  })
+})
+
+// --- campos aditivos da video-codec-upgrade (RNF-06/AC-24) ------------------
+//
+// Os dois campos novos sao OPCIONAIS e de tipo ABERTO. A regra que estes casos
+// protegem: um valor DESCONHECIDO nunca pode invalidar a mensagem inteira, senao
+// um cliente futuro cegaria este aqui (LESSONS 2026-08-25, preset novo).
+
+describe('protocol / campos opcionais de codec', () => {
+  const txStart = {
+    txId: 't',
+    presetId: 'p720_30',
+    hasAudio: false,
+    sourceKind: 'screen',
+    sourceLabel: 'Tela 1',
+    startedAt: 1
+  }
+  const quality = { level: 'good', rttMs: 30, inboundBitrateKbps: 1_000 }
+
+  it('isTxStartPayload aceita SEM videoCodec (cliente antigo)', () => {
+    expect(isTxStartPayload(txStart)).toBe(true)
+  })
+
+  it('isTxStartPayload aceita videoCodec conhecido E desconhecido', () => {
+    expect(isTxStartPayload({ ...txStart, videoCodec: 'AV1' })).toBe(true)
+    // Um cliente futuro pode anunciar um nome que este aqui nao conhece.
+    expect(isTxStartPayload({ ...txStart, videoCodec: 'H265' })).toBe(true)
+  })
+
+  it('isTxStartPayload rejeita videoCodec que nao e string', () => {
+    expect(isTxStartPayload({ ...txStart, videoCodec: 42 })).toBe(false)
+    expect(isTxStartPayload({ ...txStart, videoCodec: ['AV1'] })).toBe(false)
+  })
+
+  it('isQualityUpdatePayload aceita SEM decodes (cliente antigo)', () => {
+    expect(isQualityUpdatePayload(quality)).toBe(true)
+    expect(isQualityUpdatePayload({ ...quality, inboundBitrateKbps: null })).toBe(true)
+  })
+
+  it('isQualityUpdatePayload aceita decodes com nomes desconhecidos', () => {
+    expect(isQualityUpdatePayload({ ...quality, decodes: ['AV1', 'VP8'] })).toBe(true)
+    expect(isQualityUpdatePayload({ ...quality, decodes: ['H265', 'AV2'] })).toBe(true)
+    expect(isQualityUpdatePayload({ ...quality, decodes: [] })).toBe(true)
+  })
+
+  it('isQualityUpdatePayload rejeita decodes que nao e array de string', () => {
+    expect(isQualityUpdatePayload({ ...quality, decodes: 'VP9' })).toBe(false)
+    expect(isQualityUpdatePayload({ ...quality, decodes: ['VP9', 3] })).toBe(false)
+    expect(isQualityUpdatePayload({ ...quality, decodes: { a: 1 } })).toBe(false)
+  })
+
+  it('nenhum enum fechado do protocolo mudou', () => {
+    expect(MESSAGE_TYPES).toHaveLength(15)
+    expect(MESSAGE_TYPES).not.toContain('CODEC_HELLO')
+    expect(PROTOCOL_VERSION).toBe(1)
   })
 })

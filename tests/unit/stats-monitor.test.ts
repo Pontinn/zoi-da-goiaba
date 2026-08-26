@@ -10,6 +10,7 @@ import {
   StatsMonitor,
   classify,
   type InboundVideoStats,
+  type OutboundVideoStats,
   type QualityReport
 } from '@renderer/services/stats-monitor'
 
@@ -217,5 +218,233 @@ describe('stats-monitor', () => {
 
     expect(reports).toHaveLength(2)
     expect(connection.calls).toBe(2)
+  })
+})
+
+// --- video-codec-upgrade: laco de SAIDA no MESMO tick (RNF-07/RF-11/RF-21) ---
+
+/** Conexao falsa com reports ENDERECAVEIS por id (o codec e achado por codecId). */
+class KeyedConnection {
+  calls = 0
+  constructor(private readonly reports: Record<string, FakeReport>) {}
+
+  getStats(): Promise<Map<string, FakeReport>> {
+    this.calls += 1
+    return Promise.resolve(new Map(Object.entries(this.reports)))
+  }
+
+  asPeerConnection(): RTCPeerConnection {
+    return this as unknown as RTCPeerConnection
+  }
+}
+
+function outboundReports(overrides: FakeReport = {}): Record<string, FakeReport> {
+  return {
+    'codec-1': { type: 'codec', id: 'codec-1', mimeType: 'video/AV1' },
+    'out-1': {
+      type: 'outbound-rtp',
+      kind: 'video',
+      codecId: 'codec-1',
+      encoderImplementation: 'ExternalEncoder (NVIDIA)',
+      qualityLimitationReason: 'none',
+      framesPerSecond: 30,
+      ...overrides
+    }
+  }
+}
+
+describe('stats-monitor / conexoes de saida', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  it('le UM getStats por conexao de saida por tick, no MESMO tick da entrada', async () => {
+    const inbound = new FakeConnection([
+      { type: 'inbound-rtp', kind: 'video', bytesReceived: 10, framesDecoded: 1, framesReceived: 1 }
+    ])
+    const outbound = new KeyedConnection(outboundReports())
+    const perPeerSeen: ReadonlyMap<string, OutboundVideoStats>[] = []
+    const perTxSeen: ReadonlyMap<string, InboundVideoStats>[] = []
+
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: inbound.asPeerConnection() }],
+      outboundEntries: () => [
+        { peerId: 'p1', txId: 'tx9', connection: outbound.asPeerConnection() }
+      ],
+      onOutboundVideoStats: (stats) => perPeerSeen.push(stats),
+      averageRttMs: () => 20,
+      onReport: () => {},
+      onInboundVideoStats: (stats) => perTxSeen.push(stats)
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    expect(inbound.calls).toBe(1)
+    expect(outbound.calls).toBe(1)
+    expect(perPeerSeen).toHaveLength(1)
+    expect(perTxSeen).toHaveLength(1)
+  })
+
+  it('extrai codec, encoder, limitacao e fps do outbound-rtp', async () => {
+    const outbound = new KeyedConnection(outboundReports())
+    const seen: ReadonlyMap<string, OutboundVideoStats>[] = []
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [],
+      outboundEntries: () => [
+        { peerId: 'p1', txId: 'tx9', connection: outbound.asPeerConnection() }
+      ],
+      onOutboundVideoStats: (stats) => seen.push(stats),
+      averageRttMs: () => 20,
+      onReport: () => {}
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    const entry = seen[0]?.get('p1')
+    expect(entry?.txId).toBe('tx9')
+    expect(entry?.codec).toBe('video/AV1')
+    expect(entry?.encoderImplementation).toBe('ExternalEncoder (NVIDIA)')
+    expect(entry?.qualityLimitationReason).toBe('none')
+    expect(entry?.framesPerSecond).toBe(30)
+    expect(typeof entry?.at).toBe('number')
+  })
+
+  it('campos ausentes viram null em vez de quebrar o tick', async () => {
+    const outbound = new KeyedConnection({
+      'out-1': { type: 'outbound-rtp', kind: 'video' }
+    })
+    const seen: ReadonlyMap<string, OutboundVideoStats>[] = []
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [],
+      outboundEntries: () => [
+        { peerId: 'p1', txId: 'tx9', connection: outbound.asPeerConnection() }
+      ],
+      onOutboundVideoStats: (stats) => seen.push(stats),
+      averageRttMs: () => 20,
+      onReport: () => {}
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    const entry = seen[0]?.get('p1')
+    expect(entry?.codec).toBeNull()
+    expect(entry?.encoderImplementation).toBeNull()
+    expect(entry?.qualityLimitationReason).toBeNull()
+    expect(entry?.framesPerSecond).toBeNull()
+  })
+
+  it('o callback de saida e chamado a CADA tick, mesmo sem transmissao local', async () => {
+    const seen: ReadonlyMap<string, OutboundVideoStats>[] = []
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [],
+      outboundEntries: () => [],
+      onOutboundVideoStats: (stats) => seen.push(stats),
+      averageRttMs: () => 20,
+      onReport: () => {}
+    })
+
+    monitor.start()
+    await tick(3)
+    monitor.stop()
+
+    // E o RELOGIO do consumidor: sem estas chamadas a carencia por membro nunca
+    // venceria para quem nao esta transmitindo.
+    expect(seen).toHaveLength(3)
+    expect(seen.every((map) => map.size === 0)).toBe(true)
+  })
+
+  it('conexao de saida que rejeita getStats nao derruba o tick', async () => {
+    const broken = new BrokenConnection()
+    const good = new KeyedConnection(outboundReports())
+    const seen: ReadonlyMap<string, OutboundVideoStats>[] = []
+    const reports: QualityReport[] = []
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [],
+      outboundEntries: () => [
+        { peerId: 'quebrada', txId: 'tx9', connection: broken.asPeerConnection() },
+        { peerId: 'boa', txId: 'tx9', connection: good.asPeerConnection() }
+      ],
+      onOutboundVideoStats: (stats) => seen.push(stats),
+      averageRttMs: () => 20,
+      onReport: (report) => reports.push(report)
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    expect(seen[0]?.has('quebrada')).toBe(false)
+    expect(seen[0]?.get('boa')?.codec).toBe('video/AV1')
+    // O agregado de qualidade do tick continua saindo.
+    expect(reports).toHaveLength(1)
+  })
+
+  it('o inbound-rtp de video ganha codec e decoderImplementation opcionais', async () => {
+    const inbound = new KeyedConnection({
+      'codec-9': { type: 'codec', id: 'codec-9', mimeType: 'video/VP9' },
+      'in-1': {
+        type: 'inbound-rtp',
+        kind: 'video',
+        codecId: 'codec-9',
+        decoderImplementation: 'libvpx',
+        bytesReceived: 100,
+        framesDecoded: 7,
+        framesReceived: 8
+      }
+    })
+    const seen: ReadonlyMap<string, InboundVideoStats>[] = []
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: inbound.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 20,
+      onReport: () => {},
+      onInboundVideoStats: (stats) => seen.push(stats)
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    const entry = seen[0]?.get('tx1')
+    expect(entry?.framesDecoded).toBe(7)
+    expect(entry?.codec).toBe('video/VP9')
+    expect(entry?.decoderImplementation).toBe('libvpx')
+  })
+
+  it('RNF-07: nenhum timer novo alem do tick unico do monitor', async () => {
+    const outbound = new KeyedConnection(outboundReports())
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [],
+      outboundEntries: () => [
+        { peerId: 'p1', txId: 'tx9', connection: outbound.asPeerConnection() }
+      ],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 20,
+      onReport: () => {}
+    })
+
+    monitor.start()
+    await tick(4)
+    monitor.stop()
+    // Uma leitura por tick: se existisse um segundo laco/coletor, seriam mais.
+    expect(outbound.calls).toBe(4)
+
+    // Parado o monitor, mais nenhuma leitura acontece.
+    await tick(2)
+    expect(outbound.calls).toBe(4)
   })
 })
