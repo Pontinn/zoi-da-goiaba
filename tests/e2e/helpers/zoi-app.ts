@@ -4,7 +4,8 @@
 //
 // Nada aqui fala com o nucleo do app por atalho: todos os passos passam pela
 // interface de verdade, exatamente como o usuario faria.
-import { mkdtempSync, rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -73,6 +74,20 @@ export function uniqueRoomCode(prefix = 'e2e'): string {
  */
 const STRIPPED_ENV_KEYS = ['ELECTRON_RENDERER_URL']
 
+/**
+ * Perfil temporario ja com os sons do app em ZERO. E a segunda camada de
+ * silencio (a primeira e `--mute-audio`), usando so a chave `soundVolume` que o
+ * produto ja tem: nenhum default de produto muda. O `nickname` fica `null` de
+ * proposito para a instancia continuar caindo na primeira execucao.
+ */
+function seedSilentSettings(userDataDir: string): void {
+  writeFileSync(
+    join(userDataDir, 'settings.json'),
+    JSON.stringify({ nickname: null, installId: randomUUID(), soundVolume: 0 }, null, 2),
+    'utf8'
+  )
+}
+
 /** `process.env` sem as chaves indefinidas (o launch do Playwright exige string). */
 function cleanEnv(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -89,8 +104,13 @@ function cleanEnv(): Record<string, string> {
  */
 export async function launchInstance(label: string, nickname: string): Promise<ZoiInstance> {
   const userDataDir = mkdtempSync(join(tmpdir(), `zoi-e2e-${label.toLowerCase()}-`))
+  seedSilentSettings(userDataDir)
   const app = await electron.launch({
-    args: [PROJECT_ROOT],
+    // A maquina de desenvolvimento e o desktop diario de uma pessoa: uma sessao
+    // de teste com 3 instancias tocaria os sons do app e o audio da transmissao
+    // nas caixas dela. `--mute-audio` cala a saida de audio da instancia INTEIRA
+    // (sons do app e reproducao WebRTC) sem mexer em nada do produto.
+    args: ['--mute-audio', PROJECT_ROOT],
     cwd: PROJECT_ROOT,
     env: {
       ...cleanEnv(),
