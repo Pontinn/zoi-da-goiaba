@@ -39,6 +39,7 @@ import {
   type RoomState,
   type ToastTone
 } from '../core/room-state'
+import { describeCodecProbe } from './codec-capabilities'
 import { describeConnectionState, observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { Mesh } from './mesh'
 import {
@@ -1149,6 +1150,7 @@ if (typeof window !== 'undefined') {
   ;(window as unknown as { __zoiDebug: unknown }).__zoiDebug = {
     dropSignaling: (target?: 'door' | 'member' | 'both') => session.debugDropSignaling(target),
     checkHealth: () => session.checkSignalingHealth(),
-    health: () => session.getHealth()
+    health: () => session.getHealth(),
+    codecs: () => describeCodecProbe()
   }
 }

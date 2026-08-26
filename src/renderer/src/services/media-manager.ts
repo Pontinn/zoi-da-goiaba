@@ -15,6 +15,7 @@ import {
   type AudioExclusionClient,
   type AudioExclusionSession
 } from './audio-exclusion'
+import { ensureEncodeProbe } from './codec-capabilities'
 import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
 import type { InboundEntry } from './stats-monitor'
@@ -248,6 +249,10 @@ export class MediaManager implements MediaHooks {
     if (this.local) throw new TransmissionInProgressError()
 
     const preset = PRESETS[options.presetId]
+    // A sonda de codificacao depende do preset escolhido e e aguardada: quem
+    // escolhe o codec da sala precisa da lista pronta. Cacheada por preset, na
+    // pior hipotese resolve com ['VP8'].
+    await ensureEncodeProbe(options.presetId)
 
     // A exclusao e armada ANTES da captura de video: com ela ativa o audio nao
     // vem mais do getDisplayMedia, e sim da nossa track gerada.

@@ -6,6 +6,7 @@ import './ui/components/components.css'
 import './ui/screens/screens.css'
 import './ui/screens/room.css'
 import './ui/screens/player.css'
+import { ensureDecodeProbe, setForceVp8 } from './services/codec-capabilities'
 import { preloadSounds, setSoundVolume } from './services/sound-player'
 import { session } from './services/session'
 import { useAppStore } from './store/app-store'
@@ -62,6 +63,11 @@ export default function App(): JSX.Element {
         store.setVersion(version)
         // Antes de qualquer som tocavel: nenhum evento de sala chega ate aqui.
         setSoundVolume(settings.soundVolume)
+        // O escape PRIMEIRO, para a sonda ja sair com ele valendo. E `void` de
+        // proposito: o boot nao espera a sondagem; ate ela resolver a maquina
+        // anuncia ['VP8'] e o tick seguinte de 3s ja corrige.
+        setForceVp8(settings.forceVp8)
+        void ensureDecodeProbe()
         store.setIdentity({ nickname: settings.nickname ?? '', installId: settings.installId })
         if (!settings.nickname) {
           store.setRoute('first-run')
