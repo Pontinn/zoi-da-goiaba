@@ -3,7 +3,13 @@
 // Pilar de performance: nada aqui roda por frame; tudo e eventual.
 import type { MediaConnection } from 'peerjs'
 import {
+  pickRoomCodec,
+  preferVideoCodec,
+  type VideoCodecId
+} from '@shared/codecs'
+import {
   CALL_METADATA_WAIT_MS,
+  CODEC_MEMBER_GRACE_MS,
   ICE_ATTACH_MAX_ATTEMPTS,
   ICE_ATTACH_RETRY_INTERVAL_MS,
   MEDIA_STALL_TIMEOUT_MS
@@ -15,7 +21,7 @@ import {
   type AudioExclusionClient,
   type AudioExclusionSession
 } from './audio-exclusion'
-import { ensureEncodeProbe } from './codec-capabilities'
+import { ensureEncodeProbe, getEncodeCandidates, isForceVp8 } from './codec-capabilities'
 import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
 import type { InboundEntry } from './stats-monitor'
@@ -44,6 +50,8 @@ export interface LocalTransmission {
   hasAudio: boolean
   audioMode: AudioMode
   stream: MediaStream
+  /** Codec em uso AGORA (muda em rebaixamento/acomodacao). */
+  videoCodec: VideoCodecId
   /** Descarte do writer/port da captura com exclusao (null nos outros modos). */
   stopAudioExclusion: (() => void) | null
 }
@@ -182,6 +190,13 @@ export class MediaManager implements MediaHooks {
   private readonly pullCalls = new Map<string, PullCall>()
   /** txIds que ja tentaram a chamada reversa nesta falha (uma tentativa so). */
   private readonly pullAttempts = new Set<string>()
+  /**
+   * peerId -> quando ESTA maquina viu aquele par no roster pela primeira vez.
+   * E a base da carencia por membro: sem isso, a primeira leitura aconteceria
+   * dentro do `startTransmission` e todo mundo pareceria "recem chegado",
+   * inclusive o par de versao antiga que esta na sala ha dez minutos.
+   */
+  private readonly memberFirstSeenAt = new Map<string, number>()
   private readonly pendingCalls: PendingCall[] = []
   private pendingTimer: ReturnType<typeof setInterval> | null = null
   private readonly streamsListeners = new Set<StreamsListener>()
@@ -240,6 +255,71 @@ export class MediaManager implements MediaHooks {
   private notifyStreams(): void {
     const snapshot = this.getStreams()
     for (const listener of this.streamsListeners) listener(snapshot)
+  }
+
+  // --- escolha de codec ----------------------------------------------------
+
+  /**
+   * Transform do PeerJS, ou `undefined` quando `codec` e null ou 'VP8'.
+   *
+   * VP8 e o que o Chromium ja negocia sozinho hoje: no caminho de base (par de
+   * versao antiga, modo compatibilidade, maquina sem encoder de hardware)
+   * NENHUMA manipulacao de SDP acontece em ponta nenhuma. Isso protege a persona
+   * mais fraca (risco R5) e faz do modo compatibilidade um retorno exato ao
+   * comportamento de hoje.
+   */
+  private codecTransform(codec: VideoCodecId | null): ((sdp: string) => string) | undefined {
+    if (codec === null || codec === 'VP8') return undefined
+    return (sdp: string) => preferVideoCodec(sdp, codec)
+  }
+
+  /**
+   * Registra em `memberFirstSeenAt` todo membro do roster ainda desconhecido e
+   * apaga quem saiu. Roda a CADA tick de 3s, transmitindo ou nao.
+   */
+  private syncMemberSeen(now: number): void {
+    const state = this.session.getState()
+    const current = new Set<string>()
+    for (const member of state.members) {
+      if (member.peerId === state.selfPeerId) continue
+      current.add(member.peerId)
+      if (!this.memberFirstSeenAt.has(member.peerId)) {
+        this.memberFirstSeenAt.set(member.peerId, now)
+      }
+    }
+    for (const peerId of [...this.memberFirstSeenAt.keys()]) {
+      if (!current.has(peerId)) this.memberFirstSeenAt.delete(peerId)
+    }
+  }
+
+  /**
+   * Listas de decodificacao dos OUTROS membros, ja aplicando a CARENCIA POR
+   * MEMBRO: quem nunca anunciou e esta ha menos de `CODEC_MEMBER_GRACE_MS` no
+   * roster fica FORA da lista (ainda pode estar a caminho); passada a carencia,
+   * entra como ['VP8'] para sempre (RF-06).
+   *
+   * `now` e parametro (nao `Date.now()` interno) para o teste ser deterministico.
+   */
+  private memberDecodes(now: number): VideoCodecId[][] {
+    this.syncMemberSeen(now)
+    const state = this.session.getState()
+    const lists: VideoCodecId[][] = []
+    for (const member of state.members) {
+      if (member.peerId === state.selfPeerId) continue
+      const announced = state.decodeCapabilities[member.peerId]
+      if (announced) {
+        lists.push([...announced])
+        continue
+      }
+      const firstSeenAt = this.memberFirstSeenAt.get(member.peerId) ?? now
+      if (now - firstSeenAt >= CODEC_MEMBER_GRACE_MS) lists.push(['VP8'])
+    }
+    return lists
+  }
+
+  /** Melhor codec que esta maquina codifica e que TODA a sala decodifica. */
+  private chooseRoomCodec(now: number): VideoCodecId {
+    return pickRoomCodec(getEncodeCandidates(), this.memberDecodes(now))
   }
 
   // --- transmissao local ---------------------------------------------------
@@ -322,9 +402,11 @@ export class MediaManager implements MediaHooks {
       hasAudio,
       audioMode: !options.withAudio ? 'none' : exclusion ? 'excluded' : 'full-loopback',
       stream,
+      videoCodec: this.chooseRoomCodec(Date.now()),
       stopAudioExclusion: exclusion ? () => exclusion.stop() : null
     }
     this.local = transmission
+    console.info(`[codec] transmissao ${transmission.txId} vai sair em ${transmission.videoCodec}`)
 
     // Anuncia primeiro para que o TX_START chegue antes ou junto do `call`.
     this.session.announceTransmissionStart({
@@ -332,7 +414,8 @@ export class MediaManager implements MediaHooks {
       presetId: transmission.presetId,
       hasAudio: transmission.hasAudio,
       sourceKind: transmission.sourceKind,
-      sourceLabel: transmission.sourceLabel
+      sourceLabel: transmission.sourceLabel,
+      videoCodec: transmission.videoCodec
     })
 
     for (const peerId of this.session.otherMemberPeerIds()) {
@@ -372,9 +455,12 @@ export class MediaManager implements MediaHooks {
     if (!transmission) return
     this.closeOutgoing(peerId)
     try {
-      const call = this.session.callPeer(peerId, transmission.stream, {
-        txId: transmission.txId
-      })
+      const call = this.session.callPeer(
+        peerId,
+        transmission.stream,
+        { txId: transmission.txId },
+        this.codecTransform(transmission.videoCodec)
+      )
       this.outgoingCalls.set(peerId, {
         call,
         disposeIce: observePeerJsIce(call, `media-out:${shortPeerId(peerId)}`)
@@ -451,7 +537,8 @@ export class MediaManager implements MediaHooks {
         hasAudio: transmission.hasAudio,
         sourceKind: transmission.sourceKind,
         sourceLabel: transmission.sourceLabel,
-        startedAt: Date.now()
+        startedAt: Date.now(),
+        videoCodec: transmission.videoCodec
       }
     })
     this.callPeer(peerId)
@@ -590,9 +677,19 @@ export class MediaManager implements MediaHooks {
     const dummy = this.createPullStream()
     if (!dummy) return
 
+    // Aqui quem OFERTA e o espectador, e no WebRTC quem envia escolhe o codec a
+    // partir da descricao REMOTA: sem repetir o codec da transmissao na oferta,
+    // o transmissor cairia no default do Chromium (VP8).
+    const wanted = isForceVp8() ? 'VP8' : (state.transmissions[txId]?.videoCodec ?? null)
+
     let call: MediaConnection
     try {
-      call = this.session.callPeer(txPeerId, dummy.stream, { txId, pull: true })
+      call = this.session.callPeer(
+        txPeerId,
+        dummy.stream,
+        { txId, pull: true },
+        this.codecTransform(wanted)
+      )
     } catch (error) {
       console.warn(`[media] nao foi possivel puxar a transmissao ${txId}:`, error)
       stopTracks(dummy.stream)
@@ -630,7 +727,12 @@ export class MediaManager implements MediaHooks {
     // A oferta da reversa tem m-line de video E de audio: vai a transmissao
     // inteira. Sem audio na captura (hasAudio false) o m-line de audio fica
     // vazio e a chamada segue so com video, como antes.
-    call.answer(transmission.stream)
+    // Simetria defensiva barata: munjir a propria resposta nao dirige o que o
+    // transmissor ENVIA (isso quem dita e a oferta do outro lado), mas ajuda se
+    // o outro lado nao for Chromium.
+    call.answer(transmission.stream, {
+      sdpTransform: this.codecTransform(transmission.videoCodec)
+    })
     call.on('close', () => {
       if (this.outgoingCalls.get(peerId)?.call === call) this.closeOutgoing(peerId)
     })
@@ -805,6 +907,10 @@ export class MediaManager implements MediaHooks {
     }
     this.outgoingCalls.clear()
     this.remoteStreams.clear()
+    // Saida da sala: o mapa de "visto pela primeira vez" so morre AQUI. Limpar
+    // no `stopTransmission` faria a transmissao seguinte enxergar todo mundo
+    // como recem chegado e ignorar de novo o par de versao antiga.
+    this.memberFirstSeenAt.clear()
     if (this.local) {
       this.local.stream.getTracks().forEach((track) => track.stop())
       this.local.stopAudioExclusion?.()

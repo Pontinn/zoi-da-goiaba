@@ -2,6 +2,7 @@
 // de transporte (peer-manager, mesh, reconnection, stats) e executa os EFEITOS
 // declarativos que o reducer emite.
 import type { DataConnection, MediaConnection } from 'peerjs'
+import type { VideoCodecId } from '@shared/codecs'
 import {
   ADMISSION_IDLE_TIMEOUT_MS,
   DOOR_DIALBACK_AFTER_MS,
@@ -471,6 +472,8 @@ export class Session {
     hasAudio: boolean
     sourceKind: SourceKind
     sourceLabel: string
+    /** Codec escolhido para esta transmissao; viaja no TX_START (RF-01). */
+    videoCodec: VideoCodecId
   }): void {
     this.dispatch({ kind: 'LOCAL_TX_START', ...payload, now: Date.now() })
   }
@@ -491,8 +494,13 @@ export class Session {
   }
 
   /** Chamada de midia para um membro, com o txId no metadata (Sprint 5). */
-  callPeer(peerId: string, stream: MediaStream, metadata: CallMetadata): MediaConnection {
-    return this.peerManager.call(peerId, stream, metadata)
+  callPeer(
+    peerId: string,
+    stream: MediaStream,
+    metadata: CallMetadata,
+    sdpTransform?: (sdp: string) => string
+  ): MediaConnection {
+    return this.peerManager.call(peerId, stream, metadata, sdpTransform)
   }
 
   /**

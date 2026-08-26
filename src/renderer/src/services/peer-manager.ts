@@ -273,9 +273,25 @@ export class PeerManager {
     return peer.connect(memberPeerId, { reliable: true, serialization: 'json' })
   }
 
-  /** Chamada de midia para um membro, com o txId no metadata (correlacao RF-24). */
-  call(peerId: string, stream: MediaStream, metadata: CallMetadata): MediaConnection {
-    return this.requireMemberPeer().call(peerId, stream, { metadata })
+  /**
+   * Chamada de midia para um membro, com o txId no metadata (correlacao RF-24).
+   *
+   * `sdpTransform` e o UNICO gancho de preferencia de codec disponivel no PeerJS
+   * 1.5.5: quando `call()` retorna, a oferta ja foi criada por dentro, entao
+   * `setCodecPreferences` chegaria tarde demais. Sem transform (caminho VP8) a
+   * negociacao sai byte a byte igual a de hoje.
+   */
+  call(
+    peerId: string,
+    stream: MediaStream,
+    metadata: CallMetadata,
+    sdpTransform?: (sdp: string) => string
+  ): MediaConnection {
+    return this.requireMemberPeer().call(
+      peerId,
+      stream,
+      sdpTransform ? { metadata, sdpTransform } : { metadata }
+    )
   }
 
   // --- saude da sinalizacao -------------------------------------------------

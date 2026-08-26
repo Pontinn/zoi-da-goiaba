@@ -220,6 +220,8 @@ export interface LocalTxStartEvent {
   hasAudio: boolean
   sourceKind: SourceKind
   sourceLabel: string
+  /** Codec escolhido para esta transmissao (RF-01). */
+  videoCodec: VideoCodecId
   now: number
 }
 
@@ -1381,7 +1383,11 @@ function applyLocalTxStart(state: RoomState, event: LocalTxStartEvent): ReducerR
     sourceLabel: event.sourceLabel,
     startedAt: event.now,
     status: 'live',
-    videoCodec: null
+    // Nota de honestidade: o valor local guarda o codec do INICIO e nao
+    // acompanha rebaixamentos (o transmissor nao redispara LOCAL_TX_START para
+    // nao repetir o som "transmitindo" nele mesmo). A verdade local vive no
+    // MediaManager; nos espectadores o campo fica atual pelo reanuncio.
+    videoCodec: event.videoCodec
   }
   return {
     state: { ...state, transmissions },
@@ -1396,7 +1402,8 @@ function applyLocalTxStart(state: RoomState, event: LocalTxStartEvent): ReducerR
             hasAudio: event.hasAudio,
             sourceKind: event.sourceKind,
             sourceLabel: event.sourceLabel,
-            startedAt: event.now
+            startedAt: event.now,
+            videoCodec: event.videoCodec
           }
         }
       },
