@@ -9,6 +9,7 @@ import {
 } from '@shared/codecs'
 import {
   CALL_METADATA_WAIT_MS,
+  CODEC_LOG_EVERY_N_SAMPLES,
   CODEC_MEMBER_GRACE_MS,
   ICE_ATTACH_MAX_ATTEMPTS,
   ICE_ATTACH_RETRY_INTERVAL_MS,
@@ -24,7 +25,7 @@ import {
 import { ensureEncodeProbe, getEncodeCandidates, isForceVp8 } from './codec-capabilities'
 import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
-import type { InboundEntry } from './stats-monitor'
+import type { InboundEntry, OutboundEntry, OutboundVideoStats } from './stats-monitor'
 
 export interface StartTransmissionOptions {
   sourceId: string
@@ -199,6 +200,8 @@ export class MediaManager implements MediaHooks {
   private readonly memberFirstSeenAt = new Map<string, number>()
   /** Modo nitidez (RF-16..RF-19): escopo de SESSAO, nunca persistido. */
   private sharpness = false
+  /** peerId -> cadencia do log de codec de saida (RF-21). */
+  private readonly codecLogState = new Map<string, { samples: number; signature: string }>()
   private readonly pendingCalls: PendingCall[] = []
   private pendingTimer: ReturnType<typeof setInterval> | null = null
   private readonly streamsListeners = new Set<StreamsListener>()
@@ -436,6 +439,7 @@ export class MediaManager implements MediaHooks {
     if (!transmission) return
     this.local = null
     this.sharpness = false
+    this.codecLogState.clear()
 
     for (const outgoing of this.outgoingCalls.values()) {
       outgoing.disposeIce()
@@ -521,6 +525,7 @@ export class MediaManager implements MediaHooks {
   /** Encerra a chamada de saida de um par e o diagnostico dela. */
   private closeOutgoing(peerId: string): void {
     const outgoing = this.outgoingCalls.get(peerId)
+    this.codecLogState.delete(peerId)
     if (!outgoing) return
     this.outgoingCalls.delete(peerId)
     outgoing.disposeIce()
@@ -919,6 +924,43 @@ export class MediaManager implements MediaHooks {
     return entries
   }
 
+  /**
+   * Conexoes de SAIDA da transmissao local, etiquetadas por par (RF-11/RF-21).
+   * Vazio sem transmissao local: o monitor nao faz nenhum `getStats()` a toa.
+   */
+  outboundEntries(): OutboundEntry[] {
+    const transmission = this.local
+    if (!transmission) return []
+    const entries: OutboundEntry[] = []
+    for (const [peerId, outgoing] of this.outgoingCalls.entries()) {
+      const connection = outgoing.call.peerConnection
+      if (connection) entries.push({ peerId, txId: transmission.txId, connection })
+    }
+    return entries
+  }
+
+  /**
+   * Amostra de saida do MESMO tick de 3s do monitor de qualidade (RNF-07).
+   * A primeira linha vale SEMPRE, transmitindo ou nao: este tick e o relogio que
+   * alimenta o mapa de membros vistos, base da carencia por membro.
+   */
+  onOutboundVideoStats(stats: ReadonlyMap<string, OutboundVideoStats>): void {
+    this.syncMemberSeen(Date.now())
+    if (!this.local) return
+
+    for (const [peerId, entry] of stats) {
+      const signature = `${entry.codec}|${entry.encoderImplementation}|${entry.qualityLimitationReason}`
+      const previous = this.codecLogState.get(peerId)
+      const samples = previous ? previous.samples : 0
+      if (!previous || previous.signature !== signature || samples % CODEC_LOG_EVERY_N_SAMPLES === 0) {
+        console.info(
+          `[codec] envio ${shortPeerId(peerId)}: ${entry.codec ?? 'desconhecido'} impl=${entry.encoderImplementation ?? 'desconhecida'} fps=${entry.framesPerSecond ?? '?'} limite=${entry.qualityLimitationReason ?? 'nenhum'}`
+        )
+      }
+      this.codecLogState.set(peerId, { samples: samples + 1, signature })
+    }
+  }
+
   /** Remove uma transmissao remota que saiu do roster/parou. */
   dropRemote(txId: string): void {
     this.stopIncomingWatch(txId)
@@ -955,6 +997,7 @@ export class MediaManager implements MediaHooks {
     // como recem chegado e ignorar de novo o par de versao antiga.
     this.memberFirstSeenAt.clear()
     this.sharpness = false
+    this.codecLogState.clear()
     if (this.local) {
       this.local.stream.getTracks().forEach((track) => track.stop())
       this.local.stopAudioExclusion?.()

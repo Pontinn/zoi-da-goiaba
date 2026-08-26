@@ -78,6 +78,8 @@ describe('stats-monitor', () => {
         { txId: 'tx1', connection: first.asPeerConnection() },
         { txId: 'tx2', connection: second.asPeerConnection() }
       ],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
       averageRttMs: () => 40,
       onReport: (report) => reports.push(report),
       onInboundVideoStats: (stats) => perTxSeen.push(stats)
@@ -110,6 +112,8 @@ describe('stats-monitor', () => {
     const reports: QualityReport[] = []
     const monitor = new StatsMonitor({
       inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
       averageRttMs: () => 42.4,
       onReport: (report) => reports.push(report)
     })
@@ -141,6 +145,8 @@ describe('stats-monitor', () => {
     let seen: ReadonlyMap<string, InboundVideoStats> | null = null
     const monitor = new StatsMonitor({
       inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
       averageRttMs: () => 10,
       onReport: () => {},
       onInboundVideoStats: (stats) => {
@@ -172,6 +178,8 @@ describe('stats-monitor', () => {
         { txId: 'tx-quebrada', connection: broken.asPeerConnection() },
         { txId: 'tx-boa', connection: healthy.asPeerConnection() }
       ],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
       averageRttMs: () => 15,
       onReport: (report) => reports.push(report),
       onInboundVideoStats: (stats) => {
@@ -197,6 +205,8 @@ describe('stats-monitor', () => {
     const reports: QualityReport[] = []
     const monitor = new StatsMonitor({
       inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
       averageRttMs: () => 20,
       onReport: (report) => reports.push(report)
     })

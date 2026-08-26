@@ -5,6 +5,7 @@ import type { DataConnection, MediaConnection } from 'peerjs'
 import type { VideoCodecId } from '@shared/codecs'
 import {
   ADMISSION_IDLE_TIMEOUT_MS,
+  CODEC_LOG_EVERY_N_SAMPLES,
   DOOR_DIALBACK_AFTER_MS,
   JOIN_PEER_UNAVAILABLE_RETRY_INTERVAL_MS,
   JOIN_PEER_UNAVAILABLE_RETRY_WINDOW_MS,
@@ -51,7 +52,13 @@ import {
   type DoorHealth
 } from './peer-manager'
 import { ReconnectionManager } from './reconnection'
-import { StatsMonitor, type InboundEntry, type InboundVideoStats } from './stats-monitor'
+import {
+  StatsMonitor,
+  type InboundEntry,
+  type InboundVideoStats,
+  type OutboundEntry,
+  type OutboundVideoStats
+} from './stats-monitor'
 import { playSound } from './sound-player'
 
 export class JoinRejectedError extends Error {
@@ -134,6 +141,10 @@ export interface MediaHooks {
   stopLocal(reason: TxStopReason): void
   /** Conexoes de ENTRADA, etiquetadas por txId, para o monitor de qualidade. */
   inboundEntries(): InboundEntry[]
+  /** Conexoes de SAIDA da transmissao local, etiquetadas por par (RF-11/RF-21). */
+  outboundEntries(): OutboundEntry[]
+  /** Amostra de saida do MESMO tick de 3s do monitor de qualidade. */
+  onOutboundVideoStats(stats: ReadonlyMap<string, OutboundVideoStats>): void
   /** Libera tudo ao destruir a sessao. */
   teardown(): void
 }
@@ -181,6 +192,8 @@ const noopMediaHooks: MediaHooks = {
   dropRemote: () => {},
   stopLocal: () => {},
   inboundEntries: () => [],
+  outboundEntries: () => [],
+  onOutboundVideoStats: () => {},
   teardown: () => {}
 }
 
@@ -198,6 +211,8 @@ export class Session {
     (stats: ReadonlyMap<string, InboundVideoStats>) => void
   >()
   private readonly rttByPeer = new Map<string, number>()
+  /** txId -> cadencia do log de codec RECEBIDO (RF-11/RF-21). */
+  private readonly inboundCodecLog = new Map<string, { samples: number; signature: string }>()
 
   private health: SessionHealth = { signaling: 'up', door: 'closed' }
   /** Ja avisamos que a porta esta fechada? Evita repetir o toast a cada ciclo. */
@@ -266,8 +281,10 @@ export class Session {
 
     this.statsMonitor = new StatsMonitor({
       inboundEntries: () => this.mediaHooks.inboundEntries(),
+      outboundEntries: () => this.mediaHooks.outboundEntries(),
       averageRttMs: () => this.averageRtt(),
       onInboundVideoStats: (stats) => this.notifyInboundVideoStats(stats),
+      onOutboundVideoStats: (stats) => this.mediaHooks.onOutboundVideoStats(stats),
       onReport: (report) => {
         if (this.state.phase !== 'active') return
         this.dispatch({
@@ -1075,7 +1092,32 @@ export class Session {
   }
 
   private notifyInboundVideoStats(stats: ReadonlyMap<string, InboundVideoStats>): void {
+    this.logInboundCodecs(stats)
     for (const listener of this.inboundVideoStatsListeners) listener(stats)
+  }
+
+  /**
+   * Log simetrico do lado de QUEM ASSISTE (RF-11). E o que separa "nao chegou
+   * nada" de "chegou lixo" quando o driver do encoder do outro lado tem bug.
+   * Mesma cadencia do log de saida: a cada mudanca de assinatura ou a cada
+   * CODEC_LOG_EVERY_N_SAMPLES amostras.
+   */
+  private logInboundCodecs(stats: ReadonlyMap<string, InboundVideoStats>): void {
+    for (const [txId, entry] of stats) {
+      const signature = `${entry.codec}|${entry.decoderImplementation}`
+      const previous = this.inboundCodecLog.get(txId)
+      const samples = previous ? previous.samples : 0
+      if (
+        !previous ||
+        previous.signature !== signature ||
+        samples % CODEC_LOG_EVERY_N_SAMPLES === 0
+      ) {
+        console.info(
+          `[codec] recepcao ${txId.slice(0, 8)}: ${entry.codec ?? 'desconhecido'} impl=${entry.decoderImplementation ?? 'desconhecida'} quadros=${entry.framesDecoded}`
+        )
+      }
+      this.inboundCodecLog.set(txId, { samples: samples + 1, signature })
+    }
   }
 
   private startBackgroundTimers(): void {
@@ -1134,6 +1176,7 @@ export class Session {
     // Zera os consumidores por transmissao: sem isso o ultimo mapa ficaria
     // pendurado depois que as conexoes de entrada ja morreram.
     this.notifyInboundVideoStats(new Map())
+    this.inboundCodecLog.clear()
     this.reconnection.destroy()
     this.mediaHooks.teardown()
     this.mesh.closeAll()
