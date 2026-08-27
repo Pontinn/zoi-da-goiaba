@@ -40,6 +40,9 @@ function PickerBody({
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [withAudio, setWithAudio] = useState(true)
+  // Sempre desligado no mount (RF-03): o modal so monta quando aberto, entao a
+  // escolha nunca vaza de uma transmissao para a proxima.
+  const [pointers, setPointers] = useState(false)
   const [presetId, setPresetId] = useState<PresetId>(DEFAULT_PRESET_ID)
 
   const load = useCallback(async (): Promise<void> => {
@@ -61,6 +64,10 @@ function PickerBody({
 
   const visible = (sources ?? []).filter((source) => source.kind === tab)
   const selected = (sources ?? []).find((source) => source.id === selectedId) ?? null
+  // Ponteiros so existem ao compartilhar um monitor inteiro (RF-04). A derivacao
+  // e so de apresentacao: passear pelas abas nao apaga a escolha do usuario.
+  const pointersDisabled = selected === null || selected.kind === 'window'
+  const pointersOn = pointers && !pointersDisabled
 
   return (
     <Modal
@@ -85,7 +92,7 @@ function PickerBody({
                 sourceKind: selected.kind,
                 presetId,
                 withAudio,
-                pointers: false,
+                pointers: pointersOn,
                 displayId: selected.displayId
               })
             }}
@@ -176,6 +183,27 @@ function PickerBody({
             <span>Transmitir o audio do sistema</span>
             <span className="z-switch__hint">
               O audio capturado e o do computador inteiro, nao so o da janela escolhida.
+            </span>
+          </span>
+        </button>
+
+        <button
+          className={pointersOn ? 'z-switch z-switch--on' : 'z-switch'}
+          role="switch"
+          aria-checked={pointersOn}
+          disabled={pointersDisabled}
+          onClick={() => setPointers((value) => !value)}
+          data-testid="pointer-toggle"
+        >
+          <span className="z-switch__track">
+            <span className="z-switch__thumb" />
+          </span>
+          <span className="z-switch__label">
+            <span>Mostrar os ponteiros de quem assiste</span>
+            <span className="z-switch__hint">
+              {selected?.kind === 'window'
+                ? 'Disponivel apenas ao compartilhar um monitor inteiro.'
+                : 'Voce ve na sua tela real onde cada pessoa esta apontando.'}
             </span>
           </span>
         </button>

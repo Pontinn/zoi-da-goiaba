@@ -599,6 +599,22 @@
   background: var(--bg-hover);
 }
 
+/*
+ * Formula COMPLETA do `.z-btn:disabled` (`components.css:32-36`), as tres
+ * declaracoes: o `transform: none` neutraliza qualquer deslocamento de hover ou
+ * de clique. Vale para o botao inteiro, entao trilho, thumb e rotulo esmaecem
+ * juntos. O `:hover` fica travado para o controle desabilitado nao "acender".
+ */
+.z-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.z-switch:disabled:hover {
+  background: var(--bg-elevated);
+}
+
 .z-switch__track {
   position: relative;
   width: 38px;

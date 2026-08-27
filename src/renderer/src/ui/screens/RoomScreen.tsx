@@ -171,6 +171,14 @@ export function RoomScreen(): JSX.Element {
           'Nao foi possivel isolar o audio do Discord; a transmissao segue com o som do sistema inteiro.'
         )
       }
+      // O `startTransmission` ja resolveu o `setPointersMode`, entao este valor
+      // e final: pediu ponteiros e nao veio = o overlay nao subiu (B3.2).
+      if (choice.pointers && !transmission.pointers) {
+        pushToast(
+          'warning',
+          'Nao foi possivel abrir a camada de ponteiros; a transmissao segue sem eles.'
+        )
+      }
     } catch (error) {
       if (error instanceof TransmissionInProgressError) {
         pushToast('warning', error.message)
