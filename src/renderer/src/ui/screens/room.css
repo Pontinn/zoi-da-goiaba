@@ -680,6 +680,15 @@
   background: transparent;
 }
 
+/*
+ * A barra nao tem superficie propria: sem esta regra, o `.z-switch:disabled:hover`
+ * generico pintaria `--bg-elevated` por cima do fundo `--danger` solido. So o
+ * esmaecimento vale aqui.
+ */
+.z-switch--bar:disabled:hover {
+  background: transparent;
+}
+
 .z-switch--bar .z-switch__track {
   width: 30px;
   height: 18px;

@@ -46,6 +46,10 @@ export function RoomScreen(): JSX.Element {
   // transmissao: assim uma transmissao nova ja nasce desligada na renderizacao,
   // sem o render intermediario (e a regra de lint) de um setState em efeito.
   const [sharpnessOfTx, setSharpnessOfTx] = useState<{ txId: string; on: boolean } | null>(null)
+  // Ponteiros dos espectadores: mesmo escopo e mesmo molde do modo nitidez. O
+  // txId fica GUARDADO junto do valor para uma transmissao nova ja nascer
+  // desligada na renderizacao, sem um setState em efeito.
+  const [pointersOfTx, setPointersOfTx] = useState<{ txId: string; on: boolean } | null>(null)
 
   const iAmOwner = computeIsOwner(room)
   const code = room.roomMeta?.code ?? ''
@@ -113,6 +117,7 @@ export function RoomScreen(): JSX.Element {
   const localTxId = localTx?.txId ?? null
   // Vale so para a transmissao que esta no ar: qualquer txId novo le desligado.
   const sharpness = sharpnessOfTx !== null && sharpnessOfTx.txId === localTxId && sharpnessOfTx.on
+  const pointers = pointersOfTx !== null && pointersOfTx.txId === localTxId && pointersOfTx.on
 
   const changeSharpness = useCallback(
     (next: boolean): void => {
@@ -125,6 +130,26 @@ export function RoomScreen(): JSX.Element {
         // sabendo em vez de olhar um toggle que nao significa nada.
         pushToast('warning', 'Nao foi possivel mudar o modo nitidez agora.')
       }
+    },
+    [localTxId, pushToast]
+  )
+
+  /**
+   * Molde do `changeSharpness`, so que `async`: o `setPointersMode` precisa
+   * subir (ou derrubar) a janela de overlay antes de responder, e devolve
+   * `false` quando o `show` falha. Nunca deixar o switch ligado com o overlay
+   * caido: o retorno manda no controle.
+   */
+  const changePointers = useCallback(
+    async (next: boolean): Promise<void> => {
+      if (!localTxId) return
+      const ok = await mediaManager.setPointersMode(next)
+      if (ok) {
+        setPointersOfTx({ txId: localTxId, on: next })
+        return
+      }
+      setPointersOfTx({ txId: localTxId, on: false })
+      pushToast('warning', 'Nao foi possivel abrir a camada de ponteiros agora.')
     },
     [localTxId, pushToast]
   )
@@ -160,6 +185,8 @@ export function RoomScreen(): JSX.Element {
           : await mediaManager.startTransmission(choice)
       refreshLocalTransmission()
       setPicker('closed')
+      // O switch da barra ja nasce coerente com o do modal (caminho da F1.1).
+      setPointersOfTx({ txId: transmission.txId, on: transmission.pointers })
       if (choice.withAudio && !transmission.hasAudio) {
         pushToast(
           'warning',
@@ -217,6 +244,9 @@ export function RoomScreen(): JSX.Element {
           hasAudio={localTx.hasAudio}
           sharpness={sharpness}
           onSharpnessChange={changeSharpness}
+          pointers={pointers}
+          pointersDisabled={localTx.sourceKind === 'window'}
+          onPointersChange={(next) => void changePointers(next)}
           onSwitch={() => setPicker('switch')}
           onStop={stopTransmission}
         />
