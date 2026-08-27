@@ -179,6 +179,18 @@ O adaptador do Radmin num estado MEIO QUEBRADO (interface no ar com endereco, so
 - Radmin MEIO QUEBRADO: o ICE enumera os candidatos dele, gasta o orcamento de 10 s testando um caminho que nao existe, e a ethernet (que funcionaria) nao chega a vencer dentro da janela. Falha.
 Isso tambem explica por que os OUTROS amigos nao tem o problema: o Radmin deles esta de pe ou desligado, e nenhum desses dois estados quebra. E casa com o adaptador zumbi encontrado na maquina do usuario (`Up` com endereco, processo fechado), que continua sendo um estado real e observado deste sistema.
 
+### DECISAO DO USUARIO (2026-08-27): NAO TESTAR, CONTORNAR
+
+O usuario decidiu NAO rodar o experimento decisivo: "mo preguica de testar isso. mais facil deixar o radmin aberto".
+
+**Contorno adotado, e ele funciona:** manter o Radmin VPN aberto e conectado nas duas maquinas. Resolve o caso em campo hoje, custa zero e nao precisa de nenhuma mudanca no app.
+
+Consequencias, para quem pegar esta IDEA depois:
+- A hipotese lider (adaptador meio quebrado consumindo o orcamento do ICE) permanece **NAO CONFIRMADA**. Nao tratar como fato.
+- O E4 abaixo NAO esta pendente de execucao: foi oferecido e recusado. So retomar se o usuario pedir, ou se o sintoma voltar mesmo com o Radmin aberto (o que ja seria informacao nova e valiosa por si).
+- A dependencia de um software de terceiro para o grupo conectar CONTINUA de pe. O P7 (reabrir a decisao de nao ter TURN) segue valendo como decisao de produto, e ganhou forca: agora se sabe que a internet real funciona entre eles a ~22 ms, entao um caminho sem Radmin e viavel.
+- Os itens de OBSERVABILIDADE seguem valendo independente de causa raiz e sao baratos: registrar endereco e interface do candidato (P3), teto de tempo no gathering (P4), e trocar a mensagem de erro (P6), que hoje culpa "a rede dos dois" num caso que e de um lado so.
+
 ### EXPERIMENTO DECISIVO AGORA (substitui o E2 anterior em prioridade)
 **E4 - Radmin DESLIGADO de verdade dos dois lados.** Fechar o Radmin e DESABILITAR o adaptador no Windows (nao basta fechar a janela), nos dois, e entrar numa sala varias vezes seguidas SEM reiniciar o app entre elas.
 - Conectou de forma consistente por `(ethernet)` a ~22 ms: hipotese CONFIRMADA. O conserto vira despriorizar ou descartar candidato de interface que nao responde, e o Radmin deixa de ser necessario para o grupo.
