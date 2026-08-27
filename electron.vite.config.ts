@@ -43,7 +43,11 @@ export default defineConfig({
       // Pilar de performance: alvo moderno, o Chromium do Electron 43 suporta tudo.
       target: 'chrome140',
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/renderer/index.html') }
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          // Segunda janela de renderer: o overlay de ponteiros do transmissor.
+          overlay: resolve(__dirname, 'src/renderer/overlay.html')
+        }
       }
     }
   }
