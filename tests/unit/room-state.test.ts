@@ -4,7 +4,8 @@ import type {
   JoinAcceptPayload,
   RosterMember,
   RosterUpdatePayload,
-  ProtocolMessage
+  ProtocolMessage,
+  TxStartPayload
 } from '@shared/protocol'
 import type { SoundId } from '@shared/sounds'
 import {
@@ -1625,22 +1626,18 @@ describe('room-state / toggle de ponteiros', () => {
   }
 
   function txStart(from: string, pointers: boolean | undefined, now = 5_000): RoomEvent {
-    const payload: Record<string, unknown> = {
+    const payload: TxStartPayload = {
       txId: 'tx1',
       presetId: 'p720_30',
       hasAudio: false,
       sourceKind: 'screen',
       sourceLabel: 'Tela 1',
       startedAt: 1_000,
-      videoCodec: 'VP8'
+      videoCodec: 'VP8',
+      // Ausente = cliente antigo: o campo nem chega a existir no payload.
+      ...(pointers === undefined ? {} : { pointers })
     }
-    if (pointers !== undefined) payload['pointers'] = pointers
-    return {
-      kind: 'MESSAGE',
-      from,
-      message: { type: 'TX_START', payload } as ProtocolMessage,
-      now
-    }
+    return { kind: 'MESSAGE', from, message: { type: 'TX_START', payload }, now }
   }
 
   function toasts(effects: readonly Effect[]): { tone: string; text: string }[] {
