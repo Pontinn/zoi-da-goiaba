@@ -167,6 +167,15 @@ export class CursorHub {
     this.port?.sendCursor(recipients, { type: 'CURSOR_END', payload: { txId: target } })
   }
 
+  /**
+   * Nome do gancho que a sessao chama (`CursorHooks.onCursorMessage`). E o que
+   * faz `CursorHub` satisfazer a interface de forma ESTRUTURAL, sem que nenhum
+   * dos dois modulos importe o outro. Delega para `applyRemote`.
+   */
+  onCursorMessage(from: string, message: ProtocolMessage): void {
+    this.applyRemote(from, message)
+  }
+
   /** Entrada vinda do mesh; as checagens da matriz 5c acontecem AQUI. */
   applyRemote(from: string, message: ProtocolMessage): void {
     if (message.type === 'CURSOR_MOVE') {

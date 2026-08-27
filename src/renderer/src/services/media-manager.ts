@@ -33,6 +33,7 @@ import {
   isForceVp8,
   subscribeForceVp8
 } from './codec-capabilities'
+import { cursorHub } from './cursor-hub'
 import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
 import type { InboundEntry, OutboundEntry, OutboundVideoStats } from './stats-monitor'
@@ -1156,6 +1157,13 @@ export class MediaManager implements MediaHooks {
 /** Instancia unica ligada a sessao do app. */
 export const mediaManager = new MediaManager(session)
 session.setMediaHooks(mediaManager)
+// UNICO ponto de ligacao do hub de cursores com o transporte. Ele segue a MESMA
+// regra do mediaManager: `session.ts` nao importa nenhum dos dois, e
+// `cursor-hub.ts` nao importa `session.ts`. A ordem fica garantida por
+// construcao, porque este modulo importa `session` e portanto o modulo dela ja
+// esta totalmente avaliado quando estas duas linhas rodam.
+session.setCursorHooks(cursorHub)
+cursorHub.attach(session)
 
 /**
  * Gancho de DIAGNOSTICO do caminho de midia (mesmo espirito de
@@ -1166,6 +1174,7 @@ session.setMediaHooks(mediaManager)
 if (typeof window !== 'undefined') {
   ;(window as unknown as { __zoiDebugMedia: unknown }).__zoiDebugMedia = {
     sharpness: (on: boolean) => mediaManager.setSharpnessMode(on),
-    downgrade: () => mediaManager.debugDowngradeCodec()
+    downgrade: () => mediaManager.debugDowngradeCodec(),
+    cursors: () => cursorHub.debugSnapshot()
   }
 }
