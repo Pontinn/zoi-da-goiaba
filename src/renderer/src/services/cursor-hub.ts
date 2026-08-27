@@ -312,6 +312,11 @@ export class CursorHub {
   private flush(): void {
     const { txId, enabled } = this.sendContext
     if (!enabled || txId === null) return
+    // RF-30/AC-28: com o toggle DESLIGADO na transmissao nenhuma posicao sai,
+    // mesmo que a camada de cima ainda nao tenha atualizado o contexto de envio.
+    // A condicao ja esta em `setSendContext`, mas depender so dela seria confiar
+    // no chamador para uma invariante que custa uma comparacao.
+    if (this.state?.transmissions[txId]?.pointersEnabled !== true) return
     const point = this.pendingPoint
     if (!point) return
     const last = this.lastSentPoint
