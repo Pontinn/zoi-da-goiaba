@@ -43,6 +43,8 @@ export interface StartTransmissionOptions {
   sourceKind: SourceKind
   presetId: PresetId
   withAudio: boolean
+  /** Ponteiros dos espectadores escolhidos no seletor de fonte (RF-01). */
+  pointers: boolean
 }
 
 /**
@@ -63,6 +65,11 @@ export interface LocalTransmission {
   stream: MediaStream
   /** Codec em uso AGORA (muda em rebaixamento/acomodacao). */
   videoCodec: VideoCodecId
+  /**
+   * Ponteiros dos espectadores LIGADOS nesta transmissao (RF-02). Nasce sempre
+   * `false` e so vira `true` depois de o overlay subir de fato.
+   */
+  pointers: boolean
   /** Descarte do writer/port da captura com exclusao (null nos outros modos). */
   stopAudioExclusion: (() => void) | null
 }
@@ -508,6 +515,9 @@ export class MediaManager implements MediaHooks {
       audioMode: !options.withAudio ? 'none' : exclusion ? 'excluded' : 'full-loopback',
       stream,
       videoCodec: this.chooseRoomCodec(Date.now()),
+      // Nasce SEMPRE desligado: quem liga e o `setPointersMode(true)` logo
+      // abaixo, e so depois de a janela de overlay subir de verdade.
+      pointers: false,
       stopAudioExclusion: exclusion ? () => exclusion.stop() : null
     }
     this.local = transmission
@@ -520,7 +530,8 @@ export class MediaManager implements MediaHooks {
       hasAudio: transmission.hasAudio,
       sourceKind: transmission.sourceKind,
       sourceLabel: transmission.sourceLabel,
-      videoCodec: transmission.videoCodec
+      videoCodec: transmission.videoCodec,
+      pointers: false
     })
 
     for (const peerId of this.session.otherMemberPeerIds()) {
@@ -687,7 +698,9 @@ export class MediaManager implements MediaHooks {
         sourceKind: transmission.sourceKind,
         sourceLabel: transmission.sourceLabel,
         startedAt: Date.now(),
-        videoCodec: transmission.videoCodec
+        videoCodec: transmission.videoCodec,
+        // Sem este repasse, quem entra com os ponteiros JA ligados nunca saberia.
+        pointers: transmission.pointers
       }
     })
     this.callPeer(peerId)

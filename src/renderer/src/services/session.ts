@@ -482,6 +482,11 @@ export class Session {
     this.dispatch({ kind: 'LOCAL_WATCHING', txId, now: Date.now() })
   }
 
+  /** Liga ou desliga os ponteiros dos espectadores na transmissao local (RF-02). */
+  setTransmissionPointers(on: boolean): void {
+    this.dispatch({ kind: 'LOCAL_TX_POINTERS', on, now: Date.now() })
+  }
+
   /** Usado pelo media-manager (Sprint 5) para anunciar TX_START/TX_STOP. */
   announceTransmissionStart(payload: {
     txId: string
@@ -491,6 +496,8 @@ export class Session {
     sourceLabel: string
     /** Codec escolhido para esta transmissao; viaja no TX_START (RF-01). */
     videoCodec: VideoCodecId
+    /** Ponteiros dos espectadores ligados ja no inicio (RF-01). */
+    pointers: boolean
   }): void {
     this.dispatch({ kind: 'LOCAL_TX_START', ...payload, now: Date.now() })
   }

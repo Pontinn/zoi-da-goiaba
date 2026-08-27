@@ -14,6 +14,10 @@ export interface SourceChoice {
   sourceKind: 'screen' | 'window'
   presetId: PresetId
   withAudio: boolean
+  /** Ponteiros dos espectadores nesta transmissao (RF-01). */
+  pointers: boolean
+  /** Monitor fisico da fonte; e por ele que o overlay sabe o que cobrir (RF-08). */
+  displayId: string | null
 }
 
 export interface SourcePickerModalProps {
@@ -80,7 +84,9 @@ function PickerBody({
                 sourceLabel: selected.name,
                 sourceKind: selected.kind,
                 presetId,
-                withAudio
+                withAudio,
+                pointers: false,
+                displayId: selected.displayId
               })
             }}
           >

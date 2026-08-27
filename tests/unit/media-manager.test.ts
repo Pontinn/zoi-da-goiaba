@@ -189,7 +189,8 @@ function stateWithTransmission(): RoomState {
         sourceLabel: 'Tela 1',
         startedAt: 0,
         status: 'live',
-        videoCodec: null
+        videoCodec: null,
+        pointersEnabled: false
       }
     }
   }
@@ -306,7 +307,8 @@ function stateTransmittingLocally(): RoomState {
         sourceLabel: 'Tela 1',
         startedAt: 0,
         status: 'live',
-        videoCodec: null
+        videoCodec: null,
+        pointersEnabled: false
       }
     }
   }
@@ -1020,7 +1022,8 @@ const START_OPTIONS = {
   sourceLabel: 'Tela 1',
   sourceKind: 'screen' as const,
   presetId: 'p720_30' as const,
-  withAudio: true
+  withAudio: true,
+  pointers: false
 }
 
 describe('media-manager / captura de audio com exclusao', () => {
@@ -1255,7 +1258,8 @@ const CODEC_START_OPTIONS = {
   sourceLabel: 'Tela 1',
   sourceKind: 'screen' as const,
   presetId: 'p720_30' as const,
-  withAudio: false
+  withAudio: false,
+  pointers: false
 }
 
 function codecState(options: {
@@ -1438,7 +1442,8 @@ describe('media-manager / codec na negociacao', () => {
             sourceLabel: 'Tela 1',
             startedAt: 0,
             status: 'live',
-            videoCodec: 'AV1'
+            videoCodec: 'AV1',
+            pointersEnabled: false
           }
         }
       })
@@ -1494,7 +1499,8 @@ describe('media-manager / chamada reversa com codec', () => {
             sourceLabel: 'Tela 1',
             startedAt: 0,
             status: 'live',
-            videoCodec
+            videoCodec,
+            pointersEnabled: false
           }
         }
       })

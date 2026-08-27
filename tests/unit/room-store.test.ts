@@ -20,7 +20,8 @@ function transmission(txId: string, peerId: string): TransmissionState {
     sourceLabel: 'Tela 1',
     startedAt: 0,
     status: 'live',
-    videoCodec: null
+    videoCodec: null,
+    pointersEnabled: false
   }
 }
 

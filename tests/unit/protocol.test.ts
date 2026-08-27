@@ -43,11 +43,13 @@ describe('protocol / envelope', () => {
     expect(isEnvelope({ v: 1, type: 'PING', from: 'p', ts: 1 })).toBe(false)
   })
 
-  it('cobre todos os 15 tipos da secao 5.A', () => {
-    expect(MESSAGE_TYPES).toHaveLength(15)
+  it('cobre todos os 17 tipos da secao 5.A', () => {
+    expect(MESSAGE_TYPES).toHaveLength(17)
     expect(MESSAGE_TYPES).toContain('JOIN_REQUEST')
     expect(MESSAGE_TYPES).toContain('OWNER_TRANSFER')
     expect(MESSAGE_TYPES).toContain('QUALITY_UPDATE')
+    expect(MESSAGE_TYPES).toContain('CURSOR_MOVE')
+    expect(MESSAGE_TYPES).toContain('CURSOR_END')
   })
 })
 
@@ -269,7 +271,7 @@ describe('protocol / campos opcionais de codec', () => {
   })
 
   it('nenhum enum fechado do protocolo mudou', () => {
-    expect(MESSAGE_TYPES).toHaveLength(15)
+    expect(MESSAGE_TYPES).toHaveLength(17)
     expect(MESSAGE_TYPES).not.toContain('CODEC_HELLO')
     expect(PROTOCOL_VERSION).toBe(1)
   })

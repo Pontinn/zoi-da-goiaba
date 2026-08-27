@@ -450,6 +450,7 @@ describe('room-state / transmissoes', () => {
       sourceKind: 'window',
       sourceLabel: 'VLC',
       videoCodec: 'VP8',
+      pointers: false,
       now: 40
     })
     expect(broadcasts(started.effects)[0]).toMatchObject({ type: 'TX_START' })
@@ -475,6 +476,7 @@ describe('room-state / transmissoes', () => {
       sourceKind: 'screen',
       sourceLabel: 'Tela 1',
       videoCodec: 'VP8',
+      pointers: false,
       now: 40
     })
     expect(before.transmissions).toEqual({})
@@ -1087,6 +1089,7 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
       sourceKind: 'screen',
       sourceLabel: 'Tela 1',
       videoCodec: 'VP8',
+      pointers: false,
       now: 10
     }).state
     const result = reduce(transmitting, { kind: 'SELF_LEAVE', now: 1_000 })
