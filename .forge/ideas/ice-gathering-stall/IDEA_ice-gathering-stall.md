@@ -147,6 +147,44 @@ Leituras que isso permite:
 
 Isto NAO se resolve com mais analise. So com teste.
 
+### VIRADA DE 2026-08-27 (nova tentativa do usuario, logs2): O CAMINHO REAL FUNCIONA
+
+O usuario rodou uma versao do E2: houve falha, eles ABRIRAM O RADMIN, e conectou. Logs novos dela analisados.
+
+**O log grava o TIPO DE REDE do candidato vencedor**, coisa que passou despercebida nas analises anteriores: `conectado por local=host/udp (unknown)` contra `(ethernet)`. Contagem nos 3 dias:
+
+| Adaptador | Conexoes | RTT |
+|---|---|---|
+| `unknown` (virtual, nao classificado pelo Chromium: e o Radmin) | 28 | 2 a 4 ms |
+| `ethernet` (placa real) | 3 | 21 a 23 ms |
+
+As tres por `ethernet` sao TODAS da ultima tentativa (27/08 23:51). Sequencia exata:
+
+```
+23:50:43  app iniciado
+23:51:07  FALHOU     a porta nao respondeu 10000ms
+23:51:34  app iniciado                                      <- REINICIOU
+23:51:39  conectado  local=host/udp (ethernet) rtt=22ms     <- funcionou, por OUTRO caminho
+23:51:40  conectado  local=host/udp (ethernet) remoto=prflx/udp rtt=21ms
+```
+
+**AFIRMACAO ANTERIOR DERRUBADA (a terceira desta investigacao):** estava escrito acima que "para ela o caminho do Radmin nao e o preferido, e o unico que ja funcionou alguma vez". Era verdade nos dados de entao e DEIXOU de ser. O caminho pela internet real funciona entre eles, a ~22 ms.
+
+**RESSALVA QUE O PROPRIO USUARIO LEVANTOU:** o app dela REINICIOU entre a falha e o sucesso (23:51:34). Portanto abrir o Radmin NAO esta isolado como causa. Pode ter sido o restart, pode ter sido o Radmin, pode ter sido os dois.
+
+### HIPOTESE LIDER ATUAL (a antiga, agora com evidencia melhor)
+O adaptador do Radmin num estado MEIO QUEBRADO (interface no ar com endereco, software nao roteando) e pior que o Radmin desligado:
+- Radmin SAUDAVEL: conecta pelo virtual em 2-4 ms.
+- Radmin FECHADO DE VEZ: conecta pela ethernet em ~22 ms.
+- Radmin MEIO QUEBRADO: o ICE enumera os candidatos dele, gasta o orcamento de 10 s testando um caminho que nao existe, e a ethernet (que funcionaria) nao chega a vencer dentro da janela. Falha.
+Isso tambem explica por que os OUTROS amigos nao tem o problema: o Radmin deles esta de pe ou desligado, e nenhum desses dois estados quebra. E casa com o adaptador zumbi encontrado na maquina do usuario (`Up` com endereco, processo fechado), que continua sendo um estado real e observado deste sistema.
+
+### EXPERIMENTO DECISIVO AGORA (substitui o E2 anterior em prioridade)
+**E4 - Radmin DESLIGADO de verdade dos dois lados.** Fechar o Radmin e DESABILITAR o adaptador no Windows (nao basta fechar a janela), nos dois, e entrar numa sala varias vezes seguidas SEM reiniciar o app entre elas.
+- Conectou de forma consistente por `(ethernet)` a ~22 ms: hipotese CONFIRMADA. O conserto vira despriorizar ou descartar candidato de interface que nao responde, e o Radmin deixa de ser necessario para o grupo.
+- Continuou falhando: o Radmin nao e o fator e sobra o modo `gathering` que nao completa.
+Coletar os logs dos dois lados, e conferir o campo de tipo de rede do candidato vencedor em cada tentativa.
+
 ### EXPERIMENTOS DESENHADOS (fazer antes de desenhar qualquer conserto)
 
 **E1 - o decisivo.** Ela entra numa sala com OUTRO amigo do grupo, sem o usuario. Todos os outros amigos usam Radmin e nao tem problema com o usuario, entao qualquer um serve de controle.
