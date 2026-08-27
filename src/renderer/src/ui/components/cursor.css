@@ -1,0 +1,100 @@
+/*
+ * Marcador de cursor de um espectador (RF-06/RF-24/RF-25/RF-26).
+ *
+ * Regra do arquivo inteiro: SO `transform` e `opacity` em transicao e em
+ * keyframe. Nada de `filter`, `width`, `height`, `top`, `left` nem `box-shadow`
+ * ANIMADO (o `box-shadow` do nome e permitido justamente por ser estatico).
+ *
+ * Nenhum `z-index` aqui: dentro de `.z-player` o empilhamento e por ORDEM DE
+ * FONTE, e a camada entra antes do `PlayerControls` de proposito.
+ */
+
+.z-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Sem isto a camada roubaria o `mousemove` do proprio player. */
+  pointer-events: none;
+  will-change: transform;
+  /* O deslize (RF-25). Duracao abaixo do intervalo entre posicoes e linear. */
+  transition: transform var(--dur-cursor-glide) linear;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+/*
+ * A animacao de entrada mora no CORPO, nunca no raiz: o raiz tem o `transform`
+ * de posicao escrito pelo `CursorHub`, e animar `transform` no mesmo elemento
+ * sobrescreveria a posicao.
+ */
+.z-cursor__body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  animation: zCursorIn var(--dur-enter) var(--ease) both;
+}
+
+.z-cursor__arrow {
+  flex: none;
+}
+
+/*
+ * O nome flutua sobre VIDEO ao vivo, nao sobre superficie solida (UISPEC secao
+ * 6): fundo `--bg-app` a 85%, borda na cor da pessoa e sombra estatica dao o
+ * contraste independente do quadro por baixo.
+ */
+.z-cursor__name {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: #0e0b12d9;
+  border: 1px solid;
+  font-size: var(--text-meta);
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 8px #00000099;
+}
+
+/* Inatividade (RF-26): esmaece sem sair. Voltar refaz o fade pelo mesmo caminho. */
+.z-cursor--idle {
+  opacity: 0;
+  transition:
+    transform var(--dur-cursor-glide) linear,
+    opacity var(--dur-enter) var(--ease);
+}
+
+@keyframes zCursorIn {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/*
+ * Saida definitiva com NOME PROPRIO, nunca a de entrada invertida: uma animacao
+ * so REINICIA quando o `animation-name` muda, e reverter uma que ja terminou faz
+ * o elemento saltar para o estado final (LESSONS 2026-08-26).
+ */
+@keyframes zCursorOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+.z-cursor--leaving .z-cursor__body {
+  animation: zCursorOut var(--dur-enter) var(--ease) both;
+}
