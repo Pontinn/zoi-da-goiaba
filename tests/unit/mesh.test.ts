@@ -289,3 +289,77 @@ describe('mesh / corrida de dial simultaneo', () => {
     expect(harness.mesh.has('zzz')).toBe(false)
   })
 })
+
+// --- fan-out seletivo da viewer-cursors (RNF-01) ----------------------------
+//
+// `sendMany` existe para uma posicao de cursor alcancar SO quem participa
+// daquela transmissao. Numa sala cheia, um broadcast a 25 por segundo por
+// espectador empurraria 175 envios por segundo pelo canal confiavel que tambem
+// carrega roster, TX_START e heartbeat, e a maioria seria descartada na chegada.
+
+describe('mesh / fan-out seletivo por destinatario', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function openMesh(
+    selfPeerId: string,
+    peerIds: readonly string[]
+  ): { harness: Harness; links: Map<string, FakeConnection> } {
+    const harness = makeMesh(selfPeerId)
+    const links = new Map<string, FakeConnection>()
+    for (const peerId of peerIds) {
+      const connection = new FakeConnection(peerId, 'out')
+      links.set(peerId, connection)
+      harness.attach(connection, 'outgoing')
+      connection.fire()
+    }
+    return { harness, links }
+  }
+
+  const move = { type: 'CURSOR_MOVE', payload: { txId: 'A', x: 0.1, y: 0.2 } } as const
+
+  it('entrega SO para os destinatarios pedidos', () => {
+    // Falha na hora se alguem transformar sendMany num broadcast disfarcado.
+    const { harness, links } = openMesh('self', ['a', 'b', 'c'])
+    harness.mesh.sendMany(['a', 'c'], move)
+    expect(links.get('a')?.sent).toHaveLength(1)
+    expect(links.get('c')?.sent).toHaveLength(1)
+    expect(links.get('b')?.sent).toHaveLength(0)
+  })
+
+  it('serializa o envelope UMA vez: o objeto entregue e o MESMO', () => {
+    const { harness, links } = openMesh('self', ['a', 'b', 'c'])
+    harness.mesh.sendMany(['a', 'c'], move)
+    expect(links.get('a')?.sent[0]).toBe(links.get('c')?.sent[0])
+  })
+
+  it('lista vazia nao entrega nada e nao lanca', () => {
+    const { harness, links } = openMesh('self', ['a'])
+    expect(() => harness.mesh.sendMany([], move)).not.toThrow()
+    expect(links.get('a')?.sent).toHaveLength(0)
+  })
+
+  it('peer desconhecido e ignorado, e os outros recebem', () => {
+    const { harness, links } = openMesh('self', ['a'])
+    expect(() => harness.mesh.sendMany(['zzz'], move)).not.toThrow()
+    expect(links.get('a')?.sent).toHaveLength(0)
+    harness.mesh.sendMany(['zzz', 'a'], move)
+    expect(links.get('a')?.sent).toHaveLength(1)
+  })
+
+  it('ENFILEIRA para um par cujo canal ainda nao abriu', () => {
+    // Aceito e desejado: a fila e curta e o proximo flush chega em 40 ms.
+    const harness = makeMesh('self')
+    const late = new FakeConnection('d', 'out')
+    harness.attach(late, 'outgoing')
+    harness.mesh.sendMany(['d'], move)
+    expect(late.sent).toHaveLength(0)
+    late.fire()
+    expect(late.sent).toHaveLength(1)
+  })
+})
