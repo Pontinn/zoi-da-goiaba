@@ -25,6 +25,7 @@
     "test:e2e:watchme": "electron-vite build && node scripts/e2e-watchme.mjs",
     "icon": "node scripts/generate-icon.mjs",
     "audio:probe": "node scripts/audio-probe.mjs",
+    "pointer:probe": "node scripts/pointer-probe.mjs",
     "dist": "electron-vite build && electron-builder --win --publish never",
     "postinstall": "electron-builder install-app-deps"
   },
