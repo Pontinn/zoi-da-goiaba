@@ -175,3 +175,31 @@ export const PEER_OPTIONS = {
     ]
   }
 } as const
+
+/**
+ * Ponteiros dos espectadores (feature viewer-cursors). Nenhuma destas constantes
+ * vai para disco: a feature inteira e efemera (RF-03).
+ *
+ * `CURSOR_SEND_INTERVAL_MS`: intervalo do flush de envio de posicao. 40 ms da 25
+ * envios por segundo, dentro da faixa de 20 a 30 de RF-32 e abaixo do teto.
+ *
+ * `CURSOR_IDLE_MS`: tempo parado ate o ponteiro esmaecer no lado de quem desenha
+ * (RF-26). Tambem e o piso de seguranca contra ponteiro preso: nenhum sobrevive
+ * mais de 5 s sem posicao nova.
+ *
+ * `CURSOR_RECEIVE_MIN_GAP_MS`: piso de intervalo aceito POR PEER no recebimento.
+ * 20 ms aceita ate 50 por segundo, o dobro da cadencia nominal, o que tolera
+ * jitter de rede sem aceitar enxurrada de um cliente adulterado.
+ *
+ * `POINTER_OVERLAY_FRAME_MS`: intervalo do frame agregado, tick UNICO do
+ * CursorHub. 33 ms da aproximadamente 30 frames por segundo, e o custo passa a
+ * ser independente do numero de espectadores.
+ *
+ * `POINTER_LOG_INTERVAL_MS`: janela minima entre duas linhas de log de descarte
+ * por peer. Sem isso, uma mensagem por descarte encheria o log do dia a 25 Hz.
+ */
+export const CURSOR_SEND_INTERVAL_MS = 40
+export const CURSOR_IDLE_MS = 5_000
+export const CURSOR_RECEIVE_MIN_GAP_MS = 20
+export const POINTER_OVERLAY_FRAME_MS = 33
+export const POINTER_LOG_INTERVAL_MS = 10_000
