@@ -70,7 +70,7 @@ Logs: o de quem entra e `%APPDATA%/Zoi da Goiaba/logs/zoi-2026-08-27.log`; o do 
 - Naquela janela a maquina dela nao fechava ICE em direcao NENHUMA: as 22:31:11 ela propria falhou ao ENTRAR numa sala, com o mesmo erro. E bilateral e e do lado dela.
 - O reinicio do app resolve. Entre o boot 1 e o boot 2 nada mudou de rede: mudou o que o ICE enumerou.
 
-### CAUSA RAIZ (2026-08-27, achado na maquina de quem entra)
+### O CAMINHO QUE FUNCIONA (2026-08-27, inspecao da maquina de quem entra)
 
 O usuario informou que as duas maquinas NAO estao na mesma Wi-Fi: casas diferentes, so o mesmo provedor. Isso tornava o `host/udp` com `rtt=3ms` impossivel de explicar por rede local. A inspecao da maquina dele explicou:
 
@@ -87,10 +87,29 @@ O usuario informou que as duas maquinas NAO estao na mesma Wi-Fi: casas diferent
 
 **Consequencia de arquitetura, ate agora nao escrita em lugar nenhum:** a conectividade do grupo depende INTEIRAMENTE de um software de terceiro estar de pe. Sem TURN (RF-42) e com o STUN aparentemente sem serventia para eles, o Radmin VPN nao e um atalho, e o unico caminho. Quando ele cai, nao ha plano B.
 
-### O que e fato e o que e inferencia
-- FATO: usam Radmin VPN; e por ele que as conexoes bem-sucedidas fecharam; na maquina de quem entra o adaptador estava no ar sem o processo; ha 5 interfaces mortas concorrendo no gathering.
-- INFERENCIA: que a maquina da OUTRA pessoa estava nesse mesmo estado na noite das falhas. Explica todos os fatos, mas nao ha inspecao daquela maquina.
-- TESTE QUE CONFIRMA: os dois abrirem o Radmin VPN e confirmarem que esta CONECTADO (nao so o adaptador existindo no Windows) antes de entrar na sala. Se o padrao sumir, confirmado.
+### CONCLUSAO DE CAUSA RAIZ RETIRADA (2026-08-27, mesma noite)
+
+Uma versao anterior desta IDEA apontava o ADAPTADOR ZUMBI como causa raiz. **O usuario derrubou isso e ele esta certo.** Fica registrado porque saber o que NAO e vale tanto quanto saber o que e:
+
+- O adaptador zumbi foi encontrado na maquina de QUEM ENTRA, nao na do outro lado. Se fosse a causa, ele falharia com TODO MUNDO: sem o processo do Radmin rodando, o `26.38.59.243` dele esta morto para qualquer par. Ele conecta normalmente com os outros amigos.
+- FATO NOVO trazido pelo usuario: **todos os outros amigos do grupo tambem usam Radmin VPN e com eles nao ha problema nenhum.** Portanto "usar Radmin" NAO e o que diferencia este caso.
+- Licao de metodo: houve salto da evidencia para a conclusao sem testar a conclusao contra os casos que funcionam. O achado do adaptador zumbi e real e continua valendo como RISCO (ver P5), mas nao explica ESTE caso.
+
+### O que sobrevive como FATO
+- O caminho que fecha entre eles e a LAN virtual do Radmin (`26.x.x.x` visto pelo ICE como candidato `host`), e nao a rede local nem STUN. Sao casas diferentes, so o mesmo provedor.
+- Nas falhas o ICE nunca fechou: 92 candidatos trocados, preso em `checking`, `gathering` sem completar nos 10 s inteiros.
+- A falha e do lado DELA e e bilateral naquela janela: as 22:31:11 ela tambem falhou ao ENTRAR numa sala.
+- Reiniciar o app DELA resolve, de forma repetida.
+- Sem TURN e sem STUN util, nao existe plano B quando esse caminho nao fecha.
+
+### O que o "restart resolve" ja elimina
+Configuracao de rede ruim e persistente na maquina dela esta DESCARTADA por dois motivos independentes: reiniciar um aplicativo nao muda configuracao de rede, e ela quebraria com o grupo inteiro, nao so com uma pessoa. O que muda com o restart do app e o que o processo enumera e o estado interno dele.
+
+### A PERGUNTA QUE SEPARA AS HIPOTESES (ainda sem resposta)
+**A outra pessoa falha tambem com os DEMAIS amigos, ou so com este par?**
+- Se falha com todos: o problema e da maquina/instalacao dela, e o alvo e o que o app dela enumera ou guarda entre sessoes.
+- Se falha so com este par: o problema e da combinacao dos dois (rota entre os dois enderecos de Radmin, ordem de candidatos, algo especifico do par), e o alvo e outro.
+Sem essa resposta, qualquer desenho de conserto e chute.
 
 ## 8. Casos de borda
 
@@ -108,10 +127,11 @@ O usuario informou que as duas maquinas NAO estao na mesma Wi-Fi: casas diferent
 ## 12. Pontos em aberto (lista viva)
 
 - P1: FECHADO. O log do outro lado derrubou as duas hipoteses iniciais (peer fantasma e estado residual de dono).
-- P2: FECHADO pela inspecao da maquina de quem entra. As interfaces sao conhecidas e a causa raiz esta na secao 7: Radmin VPN como unico caminho real, com adaptador zumbi no ar sem o processo.
+- P2: PARCIALMENTE fechado. A inspecao da maquina de QUEM ENTRA explicou o caminho que funciona (LAN virtual do Radmin) e revelou o adaptador zumbi, mas NAO explica este caso (ver a retratacao na secao 7). Falta inspecionar a maquina do OUTRO lado, que e onde a falha acontece.
+- P2b (AGORA E O PRINCIPAL): a outra pessoa falha tambem com os DEMAIS amigos do grupo, ou so com este par? Todos os outros usam Radmin sem problema. Esta resposta separa "maquina dela" de "combinacao dos dois" e decide o alvo do conserto. Antes dela, qualquer desenho e chute.
 - P3: o log grava so o TIPO do candidato (`host`), nunca o endereco nem a interface. Foi o que impediu de fechar o diagnostico pelos logs e obrigou a inspecionar a maquina a mao. Deveria passar a registrar endereco e interface do candidato vencedor e dos oferecidos.
 - P4: cabe um teto de tempo no gathering, para o ICE seguir com o que ja tem em vez de esperar por interface morta? A maquina inspecionada tinha CINCO interfaces sem endereco (`169.254.x.x`) concorrendo.
-- P5: DETECTAR ADAPTADOR ZUMBI. Um candidato host de uma interface cujo software nao esta rodando e pior que candidato nenhum: ele parece valido e consome a janela inteira do ICE. Da para descartar ou despriorizar?
+- P5: DETECTAR ADAPTADOR ZUMBI (vale por si, mesmo nao sendo a causa deste caso). Um candidato host de uma interface cujo software nao esta rodando e pior que candidato nenhum: ele parece valido e consome a janela inteira do ICE. Da para descartar ou despriorizar?
 - P6: a mensagem de erro precisa mudar. "Pode ser a rede de um dos dois" espalha a suspeita e nao ajuda: o caso real e de UM lado e de UM adaptador. Algo que aponte o caminho ("nenhum caminho de rede fechou; se voces usam VPN, confira se ela esta conectada dos dois lados") resolveria em campo sem ninguem entender de ICE.
 - P7: DECISAO DE PRODUTO, e a maior delas. O grupo depende de um software de terceiro para conectar. Vale reabrir a decisao de nao ter TURN (RF-42), nem que seja um TURN so para o canal de admissao? Sem isso, qualquer queda do Radmin derruba o app inteiro e a culpa cai no app.
 - P8: avisar o proprio dono quando ele nao consegue fechar ICE em direcao nenhuma? Na noite do problema ela tambem falhou ao ENTRAR numa sala as 22:31:11 e nao soube disso.
