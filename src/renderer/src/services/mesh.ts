@@ -288,6 +288,27 @@ export class Mesh {
   }
 
   /**
+   * Envia para um SUBCONJUNTO de pares, serializando o envelope UMA vez. Espelho
+   * de `broadcast`, so que a lista de destinatarios e explicita: e o que permite
+   * um fan-out por transmissao sem pagar o custo da sala inteira (RNF-01).
+   * peerId desconhecido na lista e simplesmente ignorado.
+   */
+  sendMany(peerIds: readonly string[], message: ProtocolMessage): void {
+    if (peerIds.length === 0) return
+    const envelope = createEnvelope(
+      message.type,
+      message.payload as never,
+      this.selfPeerId,
+      Date.now()
+    )
+    for (const peerId of peerIds) {
+      const entry = this.entries.get(peerId)
+      if (!entry) continue
+      this.deliver(entry, envelope)
+    }
+  }
+
+  /**
    * Fecha o link com um par. `flush: true` garante que a ultima mensagem
    * enfileirada (tipicamente o MOD_REMOVE que precede o fechamento) chegue ao
    * outro lado antes do canal cair.

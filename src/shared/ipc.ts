@@ -136,6 +136,32 @@ export interface AudioExclusionPcmMessage {
 }
 
 // ---------------------------------------------------------------------------
+// pointer-overlay
+// ---------------------------------------------------------------------------
+
+/** Um ponteiro ja resolvido para desenho: nickname e cor vem do renderer principal. */
+export interface PointerOverlayPointer {
+  peerId: string
+  nickname: string
+  /**
+   * Cor de PREENCHIMENTO ja resolvida, no formato `hsl(H 100% L%)`. E o campo
+   * `fill` de `PersonColor`, e nao o objeto inteiro: a janela de overlay nao tem
+   * roster nem desenha avatar, entao o `soft` nao serve para nada la.
+   */
+  fill: string
+  /** Fracao [0..1] da largura/altura do monitor compartilhado. */
+  x: number
+  y: number
+  /** Parado ha mais de CURSOR_IDLE_MS: o overlay desenha esmaecido (RF-26). */
+  idle: boolean
+}
+
+export interface PointerOverlayFrame {
+  txId: string
+  pointers: PointerOverlayPointer[]
+}
+
+// ---------------------------------------------------------------------------
 // Superficie exposta no renderer como `window.zoi`
 // ---------------------------------------------------------------------------
 
