@@ -105,12 +105,43 @@ Uma versao anterior desta IDEA apontava o ADAPTADOR ZUMBI como causa raiz. **O u
 ### O que o "restart resolve" ja elimina
 Configuracao de rede ruim e persistente na maquina dela esta DESCARTADA por dois motivos independentes: reiniciar um aplicativo nao muda configuracao de rede, e ela quebraria com o grupo inteiro, nao so com uma pessoa. O que muda com o restart do app e o que o processo enumera e o estado interno dele.
 
-### A PERGUNTA QUE SEPARA AS HIPOTESES (ainda sem resposta)
-**A outra pessoa falha tambem com os DEMAIS amigos, ou so com este par?**
-- Se falha com todos: o problema e da maquina/instalacao dela, e o alvo e o que o app dela enumera ou guarda entre sessoes.
-- Se falha so com este par: o problema e da combinacao dos dois (rota entre os dois enderecos de Radmin, ordem de candidatos, algo especifico do par), e o alvo e outro.
-Sem essa resposta, qualquer desenho de conserto e chute.
+### ANALISE DOS 3 DIAS DE LOG DELA (2026-08-27, pasta restaurada pelo usuario)
 
+Contagem por dia (`iniciado`, `conectado por local=`, `nunca abriu`/`nao respondeu`):
+
+| Dia | Boots | Sucessos | Falhas |
+|---|---|---|---|
+| 25/08 | 4 | 19 | 16 |
+| 26/08 | 3 | 5 | 6 |
+| 27/08 | 2 | 4 | 10 |
+
+**E CRONICO, nao episodico:** 32 falhas contra 28 sucessos em 3 dias. E **TODAS as 28 conexoes bem-sucedidas, sem excecao, fecharam por `host/udp`**. Nunca uma unica por srflx ou relay em 3 dias. Para ela o caminho do Radmin nao e o preferido, e o unico que ja funcionou alguma vez.
+
+**Sessoes nascem boas ou ruins e tendem a permanecer.** Correlacionando cada evento com o tempo desde o boot da sessao: 25/08 boot 1 deu 11 falhas e ZERO sucesso; 27/08 boot 1 deu 9 falhas e ZERO sucesso; 26/08 boot 2 deu 4 falhas e ZERO sucesso. Outras sessoes foram quase todas de sucesso, inclusive com conexoes boas aos 24 minutos de vida. Isso confirma com dado o "reinicia e funciona", e DESCARTA tempo de vida do app como fator.
+
+### A UNICA TRANSICAO BOM -> RUIM OBSERVADA (25/08, boot 3)
+Sessao boa por ~250 s, depois falhas a partir de 3357 s. O que houve entre as duas:
+
+```
+23:07:15  OK     conectado por local=host/udp remoto=host/udp rtt=2ms
+23:47:34  ERROR  PeerJS: Lost connection to server.
+23:47:34  WARN   member disconnected da sinalizacao
+23:47:35  INFO   member open (reconectou em 1 segundo)
+23:58:18  WARN   iceConnectionState: disconnected      <- 11 min depois
+23:58:23  WARN   o ICE nao fechou (disconnected persistente).
+                 gathering=complete sinalizacao=stable gerados=13
+                 candidatos locais=[host/tcp, host/udp, srflx/udp] remotos=[host/udp]
+23:58:28  WARN   connectionState: failed
+```
+
+Leituras que isso permite:
+- A RECONEXAO DA SINALIZACAO FUNCIONOU: caiu e voltou em 1 segundo, como projetado. O que nao se refez foi o caminho de MIDIA, 11 minutos depois. Sao camadas diferentes e so uma se recuperou.
+- Neste diagnostico o lado DELA tinha `srflx/udp` (o STUN funcionou para ela), e o lado REMOTO ofereceu SO `host/udp`. Quando um dos lados so tem candidato host, o unico encontro possivel e host-com-host, que entre casas diferentes so existe pelo Radmin. Se o Radmin nao estiver de pe naquele instante, nao sobra NADA, e o srflx de um lado so nao salva por falta de par.
+- Aqui o `gathering=complete`, diferente das falhas de admissao do dia 27, onde ficou `gathering=gathering`. Sao dois modos de falha distintos e nao devem ser tratados como um so.
+
+**NOTA DE PRECISAO SOBRE O LOG:** esta linha registra a lista de TIPOS de candidato, nao os enderecos. O P3 continua valendo: sem endereco e sem interface, nao da para saber de qual placa saiu cada candidato host. Esta linha rica so aparece UMA vez em 3 dias de log (so no caminho de `disconnected persistente`), enquanto as falhas de admissao, que sao a maioria, nao produzem nenhuma.
+
+### A PERGUNTA QUE SEPARA AS HIPOTESES (ainda sem resposta)
 ## 8. Casos de borda
 
 - Maquina do dono suspende e volta.
