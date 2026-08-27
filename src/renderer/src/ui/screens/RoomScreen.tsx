@@ -374,6 +374,9 @@ export function RoomScreen(): JSX.Element {
                 quality={room.quality[selected.peerId]}
                 qualityTick={qualityTick}
                 videoStats={inboundVideoStats.get(selected.txId)}
+                pointersEnabled={selected.pointersEnabled}
+                members={room.members}
+                selfPeerId={room.selfPeerId}
                 onBack={() => selectTransmission(null)}
               />
               {transmissions.length > 1 ? (

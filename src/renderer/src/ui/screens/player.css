@@ -340,3 +340,10 @@
 .z-pip-bar__spacer {
   flex: 1;
 }
+
+.z-cursor-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
