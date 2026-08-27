@@ -259,6 +259,50 @@ export function participantCard(instance: ZoiInstance, nickname: string): Locato
 /** Mesma ordem de PRESET_LIST; duplicado aqui porque o e2e nao importa @shared. */
 const PRESET_TESTIDS = ['p720_30', 'p1080_30', 'p1080_30_hq', 'p1080_60', 'p1080_60_hq'] as const
 
+/**
+ * Pagina da SEGUNDA janela do app: o overlay de ponteiros do transmissor. O
+ * `firstWindow()` do helper so alcanca a janela principal, entao a busca aqui e
+ * por `app.windows()`, filtrando pela entry propria (`overlay.html`).
+ */
+export async function pointerOverlayPage(
+  instance: ZoiInstance,
+  timeoutMs = 20_000
+): Promise<Page> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    for (const candidate of instance.app.windows()) {
+      if (candidate.url().includes('overlay.html')) return candidate
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`janela de overlay de ponteiros nao apareceu em ${timeoutMs}ms`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+}
+
+/**
+ * Prova que NENHUMA janela de overlay esta no ar. A janela e transparente, sem
+ * frame e invisivel para captura de tela: uma orfa passaria despercebida no
+ * teste e ficaria por cima da tela do usuario de verdade, que nao conseguiria
+ * nem clicar no que esta por baixo nem fotografar o problema (RF-07/RF-10).
+ *
+ * A checagem tem uma folga curta de proposito: a janela cai por IPC e o
+ * Playwright so tira a pagina da lista quando o processo dela morre. Uma folga
+ * grande mascararia uma demora real de encerramento.
+ */
+export async function expectNoPointerOverlay(instance: ZoiInstance): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        instance.app
+          .windows()
+          .map((page) => page.url())
+          .filter((url) => url.includes('overlay.html')),
+      { message: 'janela de overlay de ponteiros ficou no ar', timeout: 5_000 }
+    )
+    .toEqual([])
+}
+
 export interface TransmitOptions {
   /** Preset da SPEC; o padrao usa o mais leve para nao pesar na maquina do teste. */
   presetId?: 'p720_30' | 'p1080_30' | 'p1080_30_hq' | 'p1080_60' | 'p1080_60_hq'
@@ -268,6 +312,11 @@ export interface TransmitOptions {
    * backend (B5) e no checklist manual; aqui so atrapalharia a determinismo.
    */
   withAudio?: boolean
+  /**
+   * Liga o toggle de ponteiros antes de confirmar (RF-01). So faz sentido com
+   * fonte de MONITOR, que e a que `startTransmission` sempre escolhe.
+   */
+  pointers?: boolean
 }
 
 /** Abre o seletor, escolhe o primeiro MONITOR e inicia a transmissao. */
@@ -276,7 +325,7 @@ export async function startTransmission(
   options: TransmitOptions = {}
 ): Promise<void> {
   const { page } = instance
-  const { presetId = 'p720_30', withAudio = false } = options
+  const { presetId = 'p720_30', withAudio = false, pointers = false } = options
 
   await page.getByTestId('transmit-button').click()
 
@@ -290,6 +339,12 @@ export async function startTransmission(
     await audioToggle.click()
   }
   await expect(audioToggle).toHaveAttribute('aria-checked', String(withAudio))
+
+  const pointerToggle = page.getByTestId('pointer-toggle')
+  if ((await pointerToggle.getAttribute('aria-checked')) !== String(pointers)) {
+    await pointerToggle.click()
+  }
+  await expect(pointerToggle).toHaveAttribute('aria-checked', String(pointers))
 
   // O seletor mostra os 5 presets e cabe na janela sem cortar rotulo.
   for (const id of PRESET_TESTIDS) {
