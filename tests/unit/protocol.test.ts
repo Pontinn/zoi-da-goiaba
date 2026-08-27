@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { PRESET_LIST } from '@shared/presets'
 import {
   createEnvelope,
+  isCursorEndPayload,
+  isCursorMovePayload,
   isEnvelope,
   isQualityUpdatePayload,
   isRosterMember,
@@ -274,5 +276,94 @@ describe('protocol / campos opcionais de codec', () => {
     expect(MESSAGE_TYPES).toHaveLength(17)
     expect(MESSAGE_TYPES).not.toContain('CODEC_HELLO')
     expect(PROTOCOL_VERSION).toBe(1)
+  })
+})
+
+// --- mensagens de cursor da viewer-cursors (RF-16/RNF-03/AC-33) -------------
+//
+// Fronteira deliberada: os guards deste arquivo sao ESTRUTURAIS e nao semanticos.
+// `isCursorMovePayload` aceita `x: 5` de proposito; quem descarta valor fora da
+// faixa e o CursorHub, em silencio e sem derrubar a conexao. Se o guard
+// rejeitasse, uma posicao absurda viraria `invalid_payload` e o Mesh logaria uma
+// linha por mensagem, a 25 por segundo.
+
+describe('protocol / mensagens de cursor', () => {
+  const move = { txId: 'a', x: 0.3, y: 0.6 }
+
+  it('isCursorMovePayload aceita um payload bem formado', () => {
+    expect(isCursorMovePayload(move)).toBe(true)
+    expect(isCursorMovePayload({ ...move, x: 0, y: 1 })).toBe(true)
+  })
+
+  it('isCursorMovePayload ACEITA valor fora da faixa [0..1]', () => {
+    // A checagem de faixa e semantica e vive no CursorHub (matriz 5c).
+    expect(isCursorMovePayload({ ...move, x: 5 })).toBe(true)
+    expect(isCursorMovePayload({ ...move, y: -1 })).toBe(true)
+  })
+
+  it('isCursorMovePayload rejeita tipo errado, txId vazio e campo ausente', () => {
+    expect(isCursorMovePayload({ ...move, x: '0.3' })).toBe(false)
+    expect(isCursorMovePayload({ ...move, txId: '' })).toBe(false)
+    expect(isCursorMovePayload({ txId: 'a', x: 0.3 })).toBe(false)
+    expect(isCursorMovePayload({ ...move, x: NaN })).toBe(false)
+    expect(isCursorMovePayload({ ...move, y: Infinity })).toBe(false)
+    expect(isCursorMovePayload(null)).toBe(false)
+    expect(isCursorMovePayload([])).toBe(false)
+  })
+
+  it('isCursorEndPayload exige apenas um txId nao vazio', () => {
+    expect(isCursorEndPayload({ txId: 'a' })).toBe(true)
+    expect(isCursorEndPayload({ txId: '' })).toBe(false)
+    expect(isCursorEndPayload({})).toBe(false)
+    expect(isCursorEndPayload(null)).toBe(false)
+  })
+
+  it('isTxStartPayload trata pointers como aditivo BOOLEANO', () => {
+    const txStart = {
+      txId: 't',
+      presetId: 'p720_30',
+      hasAudio: false,
+      sourceKind: 'screen',
+      sourceLabel: 'Tela 1',
+      startedAt: 1
+    }
+    // Sem o campo = cliente antigo, e continua valido.
+    expect(isTxStartPayload(txStart)).toBe(true)
+    expect(isTxStartPayload({ ...txStart, pointers: true })).toBe(true)
+    expect(isTxStartPayload({ ...txStart, pointers: false })).toBe(true)
+    // Nada de enum aqui: so booleano passa.
+    expect(isTxStartPayload({ ...txStart, pointers: 'sim' })).toBe(false)
+    expect(isTxStartPayload({ ...txStart, pointers: 1 })).toBe(false)
+    expect(isTxStartPayload({ ...txStart, pointers: null })).toBe(false)
+  })
+
+  it('validateEnvelope aceita CURSOR_MOVE valido e recusa payload malformado', () => {
+    const good = createEnvelope('CURSOR_MOVE', move, 'p2', 7)
+    expect(validateEnvelope(good, 'p2')).toEqual({
+      ok: true,
+      message: { type: 'CURSOR_MOVE', payload: move },
+      from: 'p2',
+      ts: 7
+    })
+    const bad = createEnvelope('CURSOR_MOVE', { ...move, x: '0.3' } as never, 'p2', 7)
+    expect(validateEnvelope(bad, 'p2')).toEqual({ ok: false, reason: 'invalid_payload' })
+  })
+
+  it('validateEnvelope aceita CURSOR_END valido', () => {
+    const envelope = createEnvelope('CURSOR_END', { txId: 'a' }, 'p2', 8)
+    expect(validateEnvelope(envelope, 'p2')).toEqual({
+      ok: true,
+      message: { type: 'CURSOR_END', payload: { txId: 'a' } },
+      from: 'p2',
+      ts: 8
+    })
+  })
+
+  it('um tipo DESCONHECIDO para na casca, com unknown_type', () => {
+    // Prova viva da compat de cliente antigo (RNF-03/AC-33): quem nao conhece
+    // CURSOR_MOVE falha em `isOneOf(type, MESSAGE_TYPES)` ANTES de qualquer
+    // guard de payload, descarta so aquele envelope e NAO fecha a conexao.
+    const envelope = { ...createEnvelope('CURSOR_MOVE', move, 'p2', 9), type: 'CURSOR_SOMETHING' }
+    expect(validateEnvelope(envelope, 'p2')).toEqual({ ok: false, reason: 'unknown_type' })
   })
 })
