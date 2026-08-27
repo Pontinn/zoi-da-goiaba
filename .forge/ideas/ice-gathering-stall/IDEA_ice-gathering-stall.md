@@ -141,7 +141,25 @@ Leituras que isso permite:
 
 **NOTA DE PRECISAO SOBRE O LOG:** esta linha registra a lista de TIPOS de candidato, nao os enderecos. O P3 continua valendo: sem endereco e sem interface, nao da para saber de qual placa saiu cada candidato host. Esta linha rica so aparece UMA vez em 3 dias de log (so no caminho de `disconnected persistente`), enquanto as falhas de admissao, que sao a maioria, nao produzem nenhuma.
 
-### A PERGUNTA QUE SEPARA AS HIPOTESES (ainda sem resposta)
+### A PERGUNTA QUE SEPARA AS HIPOTESES, E POR QUE NENHUM LOG RESPONDE
+
+**A outra pessoa nunca usou o app com mais ninguem** (informado pelo usuario em 2026-08-27). Consequencia direta e que corrige o alcance da analise acima: TODO o dado que existe e de UM UNICO PAR. O que foi registrado como "cronico na maquina dela" e, com rigor, "cronico nesta dupla". Log nenhum separa as duas coisas, porque nao existe sessao dela com outra pessoa para comparar.
+
+Isto NAO se resolve com mais analise. So com teste.
+
+### EXPERIMENTOS DESENHADOS (fazer antes de desenhar qualquer conserto)
+
+**E1 - o decisivo.** Ela entra numa sala com OUTRO amigo do grupo, sem o usuario. Todos os outros amigos usam Radmin e nao tem problema com o usuario, entao qualquer um serve de controle.
+- FALHOU: o problema e da maquina/instalacao dela. Alvo do conserto: o que o app dela enumera ao subir e o que guarda entre sessoes.
+- FUNCIONOU: o problema e da combinacao dos dois. Alvo: a rota entre os dois enderecos de Radmin, a ordem/priorizacao de candidatos, ou algo especifico do par.
+Coletar os logs dos DOIS lados da tentativa, em qualquer resultado.
+
+**E2 - mais rapido, vale rodar junto.** O par de sempre, mas conferindo ANTES que o Radmin VPN esta aberto e CONECTADO nas duas maquinas (nao basta o adaptador existir no Windows: na maquina do usuario o adaptador estava `Up` com endereco e o processo estava fechado).
+- Problema sumiu: a dependencia do Radmin esta confirmada e vira o centro do desenho, junto com P7 (reabrir a decisao de nao ter TURN).
+- Problema continuou: o Radmin nao e o fator, e sobra o modo de falha do `gathering` que nao completa.
+
+**E3 - barato e util em qualquer cenario.** Na maquina DELA, listar as interfaces de rede (`Get-NetIPAddress` e `Get-NetAdapter`) e o estado do processo do Radmin, do mesmo jeito que foi feito na maquina do usuario. E o unico dado que falta do outro lado e o log nao entrega.
+
 ## 8. Casos de borda
 
 - Maquina do dono suspende e volta.
