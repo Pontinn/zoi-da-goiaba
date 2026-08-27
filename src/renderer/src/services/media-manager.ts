@@ -20,6 +20,7 @@ import {
   ICE_ATTACH_RETRY_INTERVAL_MS,
   MEDIA_STALL_TIMEOUT_MS
 } from '@shared/config'
+import type { ZoiApi } from '@shared/ipc'
 import { PRESETS } from '@shared/presets'
 import type { PresetId, SourceKind, TxStopReason } from '@shared/protocol'
 import {
@@ -38,6 +39,17 @@ import { observePeerJsIce, shortPeerId } from './ice-diagnostics'
 import { session, type MediaHooks, type Session } from './session'
 import type { InboundEntry, OutboundEntry, OutboundVideoStats } from './stats-monitor'
 
+/**
+ * Acesso DEFENSIVO a ponte de overlay, no molde de `onSystemResume` da sessao: o
+ * teste unitario roda sem `window.zoi` completo, e a ponte pode nao existir num
+ * boot antigo. Sem esta guarda, parar uma transmissao quebraria no teste.
+ */
+function pointerOverlayApi(): ZoiApi['pointerOverlay'] | null {
+  if (typeof window === 'undefined') return null
+  const api = (window as { zoi?: Partial<ZoiApi> }).zoi
+  return api?.pointerOverlay ?? null
+}
+
 export interface StartTransmissionOptions {
   sourceId: string
   sourceLabel: string
@@ -46,6 +58,8 @@ export interface StartTransmissionOptions {
   withAudio: boolean
   /** Ponteiros dos espectadores escolhidos no seletor de fonte (RF-01). */
   pointers: boolean
+  /** Monitor fisico da fonte; sem ele o overlay nao sabe o que cobrir (RF-08). */
+  displayId: string | null
 }
 
 /**
@@ -71,6 +85,8 @@ export interface LocalTransmission {
    * `false` e so vira `true` depois de o overlay subir de fato.
    */
   pointers: boolean
+  /** Monitor fisico compartilhado; `null` quando a fonte e uma janela (RF-08). */
+  displayId: string | null
   /** Descarte do writer/port da captura com exclusao (null nos outros modos). */
   stopAudioExclusion: (() => void) | null
 }
@@ -519,6 +535,7 @@ export class MediaManager implements MediaHooks {
       // Nasce SEMPRE desligado: quem liga e o `setPointersMode(true)` logo
       // abaixo, e so depois de a janela de overlay subir de verdade.
       pointers: false,
+      displayId: options.displayId,
       stopAudioExclusion: exclusion ? () => exclusion.stop() : null
     }
     this.local = transmission
@@ -537,6 +554,15 @@ export class MediaManager implements MediaHooks {
 
     for (const peerId of this.session.otherMemberPeerIds()) {
       this.callPeer(peerId)
+    }
+
+    // O `await` e obrigatorio: quem chama le `transmission.pointers` DEPOIS do
+    // `startTransmission` para decidir se mostra o aviso de falha. Sem esperar,
+    // o aviso seria codigo morto e o switch poderia ficar ligado com o overlay
+    // caido. No caminho feliz saem dois TX_START (o do inicio com `false` e o
+    // reanuncio silencioso com `true`), e o segundo e idempotente e sem som.
+    if (options.pointers && options.sourceKind === 'screen') {
+      await this.setPointersMode(true)
     }
 
     this.notifyStreams()
@@ -561,6 +587,10 @@ export class MediaManager implements MediaHooks {
     this.outgoingCalls.clear()
     transmission.stream.getTracks().forEach((track) => track.stop())
     transmission.stopAudioExclusion?.()
+
+    // Cobre os TRES motivos de uma vez (`manual`, `source_switch`, `leaving`),
+    // e portanto RF-10 e RF-11 por construcao.
+    this.hidePointerOverlay()
 
     this.session.announceTransmissionStop(reason)
     this.notifyStreams()
@@ -600,6 +630,47 @@ export class MediaManager implements MediaHooks {
   /** Estado corrente do modo nitidez (sempre false fora de transmissao). */
   isSharpnessMode(): boolean {
     return this.sharpness
+  }
+
+  /**
+   * RF-02/RF-04/RF-07: liga ou desliga os ponteiros dos espectadores AO VIVO,
+   * sem parar nem reiniciar a transmissao. Devolve `false` quando nao foi
+   * possivel (sem transmissao local, fonte de janela, ou o overlay nao subiu):
+   * a UI usa esse retorno para reverter o switch e avisar. NUNCA deixar o switch
+   * ligado com o overlay caido.
+   */
+  async setPointersMode(on: boolean): Promise<boolean> {
+    const transmission = this.local
+    if (!transmission) return false
+    // RF-04 defensivo: compartilhamento de JANELA nunca tem ponteiro.
+    if (transmission.sourceKind !== 'screen') return false
+
+    if (on) {
+      const bridge = pointerOverlayApi()
+      const result = await bridge?.show({ displayId: transmission.displayId })
+      if (!result?.ok) {
+        console.warn(
+          `[pointer] a camada de ponteiros nao subiu (${result?.ok === false ? result.reason : 'indisponivel'})`
+        )
+        return false
+      }
+    } else {
+      this.hidePointerOverlay()
+    }
+
+    transmission.pointers = on
+    this.session.setTransmissionPointers(on)
+    cursorHub.setOverlayContext({ txId: transmission.txId, enabled: on })
+    console.info(
+      `[pointer] ponteiros ${on ? 'ligados' : 'desligados'} na transmissao ${transmission.txId}`
+    )
+    return true
+  }
+
+  /** Derruba o overlay e desliga o frame agregado. Idempotente. */
+  private hidePointerOverlay(): void {
+    void pointerOverlayApi()?.hide()
+    cursorHub.setOverlayContext({ txId: null, enabled: false })
   }
 
   /** RF-19: trocar fonte = parar a atual e comecar a nova. */
@@ -1150,6 +1221,9 @@ export class MediaManager implements MediaHooks {
       this.local.stopAudioExclusion?.()
       this.local = null
     }
+    // Sair da sala sem passar por `stopTransmission` tambem nao pode deixar a
+    // janela de overlay de pe (RF-10).
+    this.hidePointerOverlay()
     this.notifyStreams()
   }
 }
@@ -1175,6 +1249,7 @@ if (typeof window !== 'undefined') {
   ;(window as unknown as { __zoiDebugMedia: unknown }).__zoiDebugMedia = {
     sharpness: (on: boolean) => mediaManager.setSharpnessMode(on),
     downgrade: () => mediaManager.debugDowngradeCodec(),
-    cursors: () => cursorHub.debugSnapshot()
+    cursors: () => cursorHub.debugSnapshot(),
+    pointers: (on: boolean) => mediaManager.setPointersMode(on)
   }
 }

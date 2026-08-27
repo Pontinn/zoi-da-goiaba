@@ -1023,7 +1023,8 @@ const START_OPTIONS = {
   sourceKind: 'screen' as const,
   presetId: 'p720_30' as const,
   withAudio: true,
-  pointers: false
+  pointers: false,
+  displayId: 'display-1'
 }
 
 describe('media-manager / captura de audio com exclusao', () => {
@@ -1259,7 +1260,8 @@ const CODEC_START_OPTIONS = {
   sourceKind: 'screen' as const,
   presetId: 'p720_30' as const,
   withAudio: false,
-  pointers: false
+  pointers: false,
+  displayId: 'display-1'
 }
 
 function codecState(options: {
