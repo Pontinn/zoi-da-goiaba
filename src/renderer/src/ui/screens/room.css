@@ -223,6 +223,13 @@
   border-color: #3a2f4c;
 }
 
+/*
+ * A cor EFETIVA vem de `@shared/person-colors` por `style` inline (RF-21/RF-22),
+ * que vence esta folha. O par `--accent-soft`/`--accent-hover` fica como
+ * FALLBACK, para o caso de um consumidor futuro esquecer a prop `color`. A
+ * geometria (34x34, `flex: none`, raio 50%, peso 600, uppercase, tamanho de
+ * fonte herdado) e restricao a PRESERVAR, nao alvo de mudanca.
+ */
 .z-participant__avatar {
   flex: none;
   display: inline-flex;

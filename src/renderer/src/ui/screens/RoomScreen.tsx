@@ -1,6 +1,7 @@
 // Tela 4 do UISPEC (Sala): barra de transmissao, sidebar de participantes com
 // badges, grade de miniaturas ao vivo, fluxo de transmitir e moderacao do dono.
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { colorOfSlot, resolvePersonSlots, type PersonColor } from '@shared/person-colors'
 import { PRESETS } from '@shared/presets'
 import { isOwner as computeIsOwner, nicknameOf, viewersOf } from '../../core/room-state'
 import {
@@ -22,6 +23,9 @@ import { TransmittingBar } from '../components/TransmittingBar'
 import { BroadcastIcon, CheckIcon, CopyIcon, GearIcon, LogoutIcon } from '../components/icons'
 import { copyText } from '../clipboard'
 import { PlayerView } from './PlayerView'
+
+/** Corrida de render: um membro fora do mapa ainda desenha, com o slot 0. */
+const FALLBACK_PERSON_COLOR = colorOfSlot(0)
 
 export function RoomScreen(): JSX.Element {
   const room = useRoomStore((state) => state.room)
@@ -69,6 +73,18 @@ export function RoomScreen(): JSX.Element {
     }
     return labels
   }, [room.watching, room.transmissions, room.members])
+
+  /**
+   * Cores PRONTAS por pessoa (RF-21/RF-22). Memoizar so os slots e chamar
+   * `colorOfSlot` dentro do `map` do JSX criaria um objeto novo a cada render e
+   * anularia o `memo` do `ParticipantCard`, re-renderizando a lista inteira.
+   */
+  const personColors = useMemo(() => {
+    const slots = resolvePersonSlots(room.members)
+    const out: Record<string, PersonColor> = {}
+    for (const member of room.members) out[member.peerId] = colorOfSlot(slots[member.peerId] ?? 0)
+    return out
+  }, [room.members])
 
   const selected = selectedTxId === null ? null : (room.transmissions[selectedTxId] ?? null)
   /**
@@ -309,6 +325,7 @@ export function RoomScreen(): JSX.Element {
                 nickname={member.nickname}
                 isSelf={member.peerId === room.selfPeerId}
                 isOwner={member.isOwner}
+                color={personColors[member.peerId] ?? FALLBACK_PERSON_COLOR}
                 canModerate={iAmOwner}
                 transmitting={transmittingPeers.has(member.peerId)}
                 watchingLabel={watchingLabels[member.peerId] ?? null}
