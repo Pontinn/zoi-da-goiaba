@@ -18,6 +18,7 @@ import {
   expectRoster,
   joinRoom,
   launchInstance,
+  selectMonitorSource,
   signalingIsReachable,
   startTransmission,
   stopTransmission,
@@ -46,9 +47,7 @@ async function mediaElementCount(instance: ZoiInstance): Promise<number> {
 async function switchSource(instance: ZoiInstance): Promise<void> {
   const { page } = instance
   await page.getByRole('button', { name: 'Trocar fonte' }).click()
-  const sources = page.getByTestId('capture-source')
-  await expect(sources.first()).toBeVisible({ timeout: TIMEOUTS.media })
-  await sources.first().click()
+  await selectMonitorSource(instance)
   await page.getByTestId('preset-p720_30').click()
   await page.getByTestId('picker-confirm').click()
   await expect(page.getByTestId('transmitting-bar')).toBeVisible({ timeout: TIMEOUTS.media })

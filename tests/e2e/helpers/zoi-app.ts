@@ -97,6 +97,162 @@ function cleanEnv(): Record<string, string> {
   return env
 }
 
+/** Retangulo em pixels logicos (DIP) do espaco de coordenadas do Electron. */
+export interface Rect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface DisplayInfo {
+  /** `Display.id` em string, do mesmo jeito que o `display_id` das fontes. */
+  readonly id: string
+  readonly bounds: Rect
+  readonly scaleFactor: number
+  readonly isPrimary: boolean
+}
+
+/**
+ * Monitor que a transmissao do e2e vai capturar (e, por tabela, o que o overlay
+ * de ponteiros vai cobrir): o primeiro NAO primario, quando existe.
+ *
+ * A maquina de desenvolvimento e o desktop diario de uma pessoa, e a camada de
+ * ponteiros e uma janela sempre-no-topo cobrindo um monitor INTEIRO. Jogando o
+ * teste para o monitor secundario, nem as janelas do app nem o overlay entram
+ * na tela em que a pessoa esta trabalhando. Com UM monitor so nao ha para onde
+ * ir: devolve o primario e tudo continua exatamente como era (CI, outra
+ * maquina), sem erro e sem teste pulado.
+ */
+export async function captureTargetDisplay(instance: ZoiInstance): Promise<DisplayInfo> {
+  return instance.app.evaluate(({ screen }) => {
+    const primary = screen.getPrimaryDisplay()
+    const target = screen.getAllDisplays().find((display) => display.id !== primary.id) ?? primary
+    return {
+      id: String(target.id),
+      bounds: { ...target.bounds },
+      scaleFactor: target.scaleFactor,
+      isPrimary: target.id === primary.id
+    }
+  })
+}
+
+/** Bounds da janela PRINCIPAL da instancia (a que nao e o overlay). */
+export async function mainWindowBounds(instance: ZoiInstance): Promise<Rect | null> {
+  return instance.app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows().find(
+      (candidate) => !candidate.webContents.getURL().includes('overlay.html')
+    )
+    return window ? { ...window.getBounds() } : null
+  })
+}
+
+/** Bounds da janela de overlay de ponteiros, ou `null` se ela nao existir. */
+export async function pointerOverlayBounds(instance: ZoiInstance): Promise<Rect | null> {
+  return instance.app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) =>
+      candidate.webContents.getURL().includes('overlay.html')
+    )
+    return window ? { ...window.getBounds() } : null
+  })
+}
+
+/**
+ * Calcula e aplica o retangulo da janela principal no monitor de teste:
+ * centralizada e do MESMO tamanho logico de antes (so muda de lugar, nunca de
+ * geometria - varios asserts dependem do layout da janela). Devolve o retangulo
+ * planejado, ou `null` numa maquina de um monitor so, onde nao ha para onde ir e
+ * tudo continua exatamente como era.
+ *
+ * A janela pode nao existir ainda quando o `launch` do Playwright resolve, por
+ * isso o gancho de `browser-window-created`. So a PRIMEIRA janela e movida: a
+ * segunda do app e o overlay de ponteiros, que dimensiona a si mesmo para cobrir
+ * um monitor inteiro e nao pode ser reposicionado por fora.
+ */
+async function planTestDisplayPlacement(app: ElectronApplication): Promise<Rect | null> {
+  return app.evaluate(({ app: electronApp, BrowserWindow, screen }) => {
+    const primary = screen.getPrimaryDisplay()
+    const target = screen.getAllDisplays().find((display) => display.id !== primary.id)
+    if (!target) return null
+
+    const place = (window: Electron.BrowserWindow): Rect | null => {
+      if (window.isDestroyed()) return null
+      if (window.webContents.getURL().includes('overlay.html')) return null
+      const current = window.getBounds()
+      const width = Math.min(current.width, target.bounds.width)
+      const height = Math.min(current.height, target.bounds.height)
+      const rect = {
+        x: target.bounds.x + Math.round((target.bounds.width - width) / 2),
+        y: target.bounds.y + Math.round((target.bounds.height - height) / 2),
+        width,
+        height
+      }
+      window.setBounds(rect)
+      return rect
+    }
+
+    const existing = BrowserWindow.getAllWindows()[0]
+    if (existing) return place(existing)
+
+    return new Promise<Rect | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), 30_000)
+      electronApp.once('browser-window-created', (_event, window) => {
+        clearTimeout(timer)
+        resolve(place(window))
+      })
+    })
+  })
+}
+
+/**
+ * Reafirma o retangulo planejado ate ele PARAR de pe.
+ *
+ * Sem isto a janela chega ao monitor de teste com outro tamanho: o Windows
+ * reescala a janela quando ela cruza para um monitor de DPI diferente (aqui,
+ * 1.25 para 1.0), e 1200x800 vira 960x640 - a 20px do `minWidth` do app e com um
+ * layout que nao e o mesmo que os asserts da suite viram sempre. Reaplicando o
+ * retangulo com a janela JA no destino nao ha troca de DPI, e o tamanho fica.
+ *
+ * Exige leituras iguais em sequencia porque a reescala pode chegar depois do
+ * `show`: uma unica leitura boa nao prova que a geometria assentou.
+ */
+async function settleTestDisplayBounds(app: ElectronApplication, plan: Rect): Promise<void> {
+  const matches = (rect: Rect | null): boolean =>
+    rect !== null &&
+    rect.x === plan.x &&
+    rect.y === plan.y &&
+    rect.width === plan.width &&
+    rect.height === plan.height
+
+  let stable = 0
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const bounds = await app.evaluate(({ BrowserWindow }, rect) => {
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => !candidate.webContents.getURL().includes('overlay.html')
+      )
+      if (!window || window.isDestroyed()) return null
+      const current = window.getBounds()
+      if (
+        current.x !== rect.x ||
+        current.y !== rect.y ||
+        current.width !== rect.width ||
+        current.height !== rect.height
+      ) {
+        window.setBounds(rect)
+        return null
+      }
+      return current
+    }, plan)
+
+    stable = matches(bounds) ? stable + 1 : 0
+    if (stable >= 3) return
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
+  console.warn(
+    `janela do teste nao assentou em ${JSON.stringify(plan)}: a geometria pode diferir do padrao da suite`
+  )
+}
+
 export interface LaunchOptions {
   /**
    * Perfil que JA existe, para reabrir a mesma instalacao. E o que permite
@@ -139,7 +295,13 @@ export async function launchInstance(
     timeout: LAUNCH_TIMEOUT_MS
   })
 
+  // Antes do `firstWindow` de proposito: quanto mais cedo o gancho entra, menor
+  // a chance de a janela chegar a piscar no monitor de quem esta usando a
+  // maquina (ela so aparece no `ready-to-show`).
+  const placement = await planTestDisplayPlacement(app)
+
   const page = await app.firstWindow({ timeout: LAUNCH_TIMEOUT_MS })
+  if (placement) await settleTestDisplayBounds(app, placement)
   const consoleErrors: string[] = []
   const consoleLines: string[] = []
   page.on('console', (message) => {
@@ -319,7 +481,58 @@ export interface TransmitOptions {
   pointers?: boolean
 }
 
-/** Abre o seletor, escolhe o primeiro MONITOR e inicia a transmissao. */
+/**
+ * Nome da fonte de MONITOR que casa com o monitor de teste, ou `null` quando a
+ * maquina tem um monitor so (nao ha preferencia a exprimir).
+ */
+async function preferredMonitorSourceName(instance: ZoiInstance): Promise<string | null> {
+  return instance.app.evaluate(async ({ desktopCapturer, screen }) => {
+    if (screen.getAllDisplays().length < 2) return null
+    const primaryId = String(screen.getPrimaryDisplay().id)
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1, height: 1 }
+    })
+    const match = sources.find(
+      (source) => source.display_id !== '' && source.display_id !== primaryId
+    )
+    return match ? match.name : null
+  })
+}
+
+/**
+ * Escolhe uma fonte de MONITOR no seletor ja aberto, preferindo a do monitor de
+ * teste. Nao basta mandar as janelas do app para o outro monitor: o overlay de
+ * ponteiros cobre o monitor CAPTURADO, nao o monitor onde a janela esta. Se a
+ * captura continuasse no primario, a camada sempre-no-topo cairia justamente na
+ * tela em que a pessoa esta trabalhando e o ganho seria zero.
+ *
+ * A casagem e por NOME, comparado com o `title` exato que o seletor ja mostra:
+ * o indice do item na grade e derivado da mesma lista do `desktopCapturer`,
+ * entao nao ha suposicao sobre ordenacao. Sem casar (um monitor so, ou fonte
+ * sem `display_id`), cai no primeiro item, que e o comportamento de antes.
+ */
+export async function selectMonitorSource(instance: ZoiInstance): Promise<void> {
+  const sources = instance.page.getByTestId('capture-source')
+  await expect(sources.first()).toBeVisible({ timeout: MEDIA_TIMEOUT_MS })
+  await pace()
+
+  const preferred = await preferredMonitorSourceName(instance)
+  if (preferred !== null) {
+    const titles = await instance.page.evaluate<string[]>(
+      "Array.from(document.querySelectorAll('[data-testid=\"capture-source\"] .z-source__name')).map((node) => node.getAttribute('title') ?? '')"
+    )
+    const index = titles.indexOf(preferred)
+    if (index >= 0) {
+      await sources.nth(index).click()
+      return
+    }
+  }
+
+  await sources.first().click()
+}
+
+/** Abre o seletor, escolhe o MONITOR de teste e inicia a transmissao. */
 export async function startTransmission(
   instance: ZoiInstance,
   options: TransmitOptions = {}
@@ -328,11 +541,7 @@ export async function startTransmission(
   const { presetId = 'p720_30', withAudio = false, pointers = false } = options
 
   await page.getByTestId('transmit-button').click()
-
-  const sources = page.getByTestId('capture-source')
-  await expect(sources.first()).toBeVisible({ timeout: MEDIA_TIMEOUT_MS })
-  await pace()
-  await sources.first().click()
+  await selectMonitorSource(instance)
 
   const audioToggle = page.getByTestId('audio-toggle')
   if ((await audioToggle.getAttribute('aria-checked')) !== String(withAudio)) {

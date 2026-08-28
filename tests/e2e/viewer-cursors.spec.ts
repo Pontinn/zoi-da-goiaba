@@ -14,6 +14,7 @@
 // "assistindo" aparecer no card da Bruna antes do primeiro `page.mouse.move`.
 import { expect, test } from '@playwright/test'
 import {
+  captureTargetDisplay,
   closeInstance,
   createRoom,
   expectNoDirectionFallbacks,
@@ -22,7 +23,9 @@ import {
   joinRoom,
   launchInstance,
   participantCard,
+  pointerOverlayBounds,
   pointerOverlayPage,
+  selectMonitorSource,
   signalingIsReachable,
   startTransmission,
   stopTransmission,
@@ -97,9 +100,7 @@ test.describe('ponteiros dos espectadores', () => {
 
     // AC-01: com um MONITOR selecionado, o controle nasce desligado.
     await page.getByTestId('transmit-button').click()
-    const sources = page.getByTestId('capture-source')
-    await expect(sources.first()).toBeVisible({ timeout: TIMEOUTS.media })
-    await sources.first().click()
+    await selectMonitorSource(leo)
     const toggle = page.getByTestId('pointer-toggle')
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
@@ -123,10 +124,7 @@ test.describe('ponteiros dos espectadores', () => {
     await expectNoPointerOverlay(leo)
 
     await page.getByTestId('transmit-button').click()
-    await expect(page.getByTestId('capture-source').first()).toBeVisible({
-      timeout: TIMEOUTS.media
-    })
-    await page.getByTestId('capture-source').first().click()
+    await selectMonitorSource(leo)
     await expect(page.getByTestId('pointer-toggle')).toHaveAttribute('aria-checked', 'false')
 
     expectNoDirectionFallbacks([leo])
@@ -148,6 +146,14 @@ test.describe('ponteiros dos espectadores', () => {
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
     await pointerOverlayPage(leo)
     await expect(bar).toBeVisible()
+
+    // RF-08: o overlay cobre o monitor CAPTURADO, inteiro e so ele. Numa
+    // maquina com dois monitores o e2e captura o secundario de proposito, entao
+    // este assert tambem prova que a camada sempre-no-topo nao caiu na tela em
+    // que a pessoa esta trabalhando. Com um monitor so, capturado e primario
+    // sao o mesmo e o assert continua valendo.
+    const captured = await captureTargetDisplay(leo)
+    expect(await pointerOverlayBounds(leo)).toEqual(captured.bounds)
 
     // AC-12/RF-10: parar com os ponteiros ligados nao deixa janela orfa.
     await stopTransmission(leo)
@@ -199,7 +205,18 @@ test.describe('ponteiros dos espectadores', () => {
     await expect(bruna.page.getByTestId('cursor-marker')).toHaveCount(0)
 
     // AC-16/RF-17: a faixa preta do letterbox encerra o ponteiro, nao o prende
-    // na borda. O topo da caixa do player e faixa preta com stream 16:9.
+    // na borda. A faixa de cima so existe se o video for proporcionalmente MAIS
+    // LARGO que a caixa do player (`object-fit: contain`), e a proporcao do
+    // video e a do monitor capturado. Isso era implicito enquanto o e2e sempre
+    // capturava o primario; agora que ele prefere o secundario, a dependencia
+    // fica explicita aqui em vez de virar uma falha misteriosa em quem tiver
+    // dois monitores de proporcoes diferentes.
+    const captured = await captureTargetDisplay(leo)
+    expect(
+      captured.bounds.width / captured.bounds.height,
+      'o monitor capturado precisa ser mais largo que a caixa do player, senao nao ha letterbox no topo'
+    ).toBeGreaterThan(box!.width / box!.height)
+
     await pointUntil(bruna, centerX, Math.round(box!.y + 2), async () => {
       await expect(brunaMarkerOnJoao).toHaveCount(0, { timeout: 2_000 })
     })
