@@ -12,7 +12,7 @@
 // debounce de 300ms mais o tempo de rede. Mexer o mouse antes disso faria TODA
 // posicao ser descartada em silencio. Por isso o teste espera o rotulo de
 // "assistindo" aparecer no card da Bruna antes do primeiro `page.mouse.move`.
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
   captureTargetDisplay,
   closeInstance,
@@ -70,6 +70,56 @@ async function openPlayer(instance: ZoiInstance): Promise<void> {
   await expect(instance.page.getByTestId('player-controls')).toBeVisible({
     timeout: TIMEOUTS.media
   })
+}
+
+/**
+ * `CURSOR_IDLE_MS` de `@shared/config`, repetido aqui porque o e2e nao importa
+ * `@shared` (mesmo motivo do `PRESET_TESTIDS` do helper).
+ */
+const CURSOR_IDLE_MS = 5_000
+
+/**
+ * Excecoes nao tratadas de TODAS as janelas da instancia, inclusive as que ainda
+ * nao existem: a janela de overlay de ponteiros nasce e morre a cada ciclo do
+ * toggle, e um erro dentro dela nunca apareceria no `consoleErrors` do helper,
+ * que so escuta a janela principal. O ACHADO F1 da rodada de teste era
+ * exatamente uma excecao de `removeChild` que ninguem conseguia atribuir a uma
+ * janela: sem esta rede, um erro assim volta a passar despercebido.
+ */
+function watchWindowErrors(instance: ZoiInstance, sink: string[]): void {
+  const attach = (page: Page): void => {
+    const kind = page.url().includes('overlay.html') ? 'overlay' : 'principal'
+    page.on('pageerror', (error) => {
+      sink.push(`[${instance.label} ${kind}] ${error.stack ?? error.message}`)
+    })
+  }
+  for (const page of instance.app.windows()) attach(page)
+  instance.app.on('window', attach)
+}
+
+/** Marcador de um peer DENTRO da janela de overlay do transmissor. */
+async function overlayMarker(instance: ZoiInstance, peerId: string): Promise<Locator> {
+  const page = await pointerOverlayPage(instance)
+  return page.locator(`[data-testid="cursor-marker"][data-peer-id="${peerId}"]`)
+}
+
+/**
+ * `opacity` computado do marcador de um peer na janela de overlay, ou
+ * `'ausente'` quando ele nao esta no DOM. O AC-25 esmaece SEM tirar o elemento
+ * da pagina, entao so contar elemento nunca provaria o esmaecimento.
+ */
+async function overlayMarkerOpacity(instance: ZoiInstance, peerId: string): Promise<string> {
+  const page = await pointerOverlayPage(instance)
+  return page.evaluate<string>(
+    `(() => { const node = document.querySelector('[data-testid="cursor-marker"][data-peer-id="${peerId}"]'); return node === null ? 'ausente' : getComputedStyle(node).opacity })()`
+  )
+}
+
+/** Centro da area de conteudo do video do player aberto. */
+async function videoCenter(instance: ZoiInstance): Promise<{ x: number; y: number }> {
+  const box = await instance.page.locator('.z-player__video').boundingBox()
+  expect(box, 'a caixa do video deveria existir').not.toBeNull()
+  return { x: Math.round(box!.x + box!.width / 2), y: Math.round(box!.y + box!.height / 2) }
 }
 
 test.describe('ponteiros dos espectadores', () => {
@@ -227,6 +277,214 @@ test.describe('ponteiros dos espectadores', () => {
     await expectNoPointerOverlay(leo)
 
     expectNoDirectionFallbacks([leo, bruna, joao])
+  })
+
+  /*
+   * Sessao LONGA, o roteiro que produziu o ACHADO F1 da rodada de teste: duas
+   * transmissoes ao mesmo tempo, a espectadora trocando de txId, o ciclo de
+   * ligar e desligar o toggle (RF-27/RF-28), um peer saindo enquanto aponta
+   * (RF-29) e perda e retomada de foco (RF-20), tudo em sequencia rapida.
+   *
+   * O que este teste guarda que nenhum outro guardava:
+   * 1. excecao nao tratada em QUALQUER janela, inclusive a de overlay, que nasce
+   *    e morre a cada ciclo do toggle e nao era observada por ninguem;
+   * 2. a RETOMADA do RF-20 (o ponteiro volta depois do foco), que a rodada de
+   *    teste nao conseguiu confirmar;
+   * 3. o AC-25 (esmaece parado, volta ao mexer) medido por `opacity` computado,
+   *    e nao por presenca no DOM: o marcador inativo CONTINUA no DOM, entao
+   *    contar elemento nunca provaria o esmaecimento.
+   *
+   * O `blur`/`focus` e disparado como evento de janela em vez de mexer no foco
+   * do sistema operacional de proposito: com tres janelas do MESMO app na mesma
+   * maquina, o foco real nem sempre migra em automacao, e o teste ficaria
+   * instavel por um motivo que nao e o produto. O produto escuta exatamente
+   * estes dois eventos de `window` (PlayerView), entao o caminho exercitado e o
+   * mesmo.
+   */
+  test('sessao longa com troca de txId, toggle e foco nao deixa excecao e o ponteiro volta', async () => {
+    const code = uniqueRoomCode('ptr')
+    leo = await launchInstance('A', LEO)
+    await createRoom(leo, code)
+    bruna = await launchInstance('B', BRUNA)
+    await joinRoom(bruna, code)
+    joao = await launchInstance('C', JOAO)
+    await joinRoom(joao, code)
+    await expectRoster(leo, [LEO, BRUNA, JOAO])
+
+    const crashes: string[] = []
+    watchWindowErrors(leo, crashes)
+    watchWindowErrors(bruna, crashes)
+    watchWindowErrors(joao, crashes)
+
+    // Duas transmissoes no ar ao mesmo tempo, as duas com ponteiros ligados.
+    await startTransmission(leo, { pointers: true })
+    await pointerOverlayPage(leo)
+    await startTransmission(joao, { pointers: true })
+    await pointerOverlayPage(joao)
+
+    const brunaPeerId = await selfPeerIdOf(bruna)
+    expect(brunaPeerId.length, 'peerId da Bruna deveria estar no card dela').toBeGreaterThan(0)
+
+    const thumbLeo = bruna.page.getByTestId('stream-thumb').filter({ hasText: LEO })
+    const thumbJoao = bruna.page.getByTestId('stream-thumb').filter({ hasText: JOAO })
+
+    // A Bruna assiste o Leo e aponta.
+    await expect(thumbLeo).toBeVisible({ timeout: TIMEOUTS.media })
+    await thumbLeo.click()
+    await expect(bruna.page.getByTestId('player-controls')).toBeVisible({
+      timeout: TIMEOUTS.media
+    })
+    await expect(participantCard(leo, BRUNA)).toContainText(LEO, { timeout: TIMEOUTS.room })
+    let markerOnLeo = await overlayMarker(leo, brunaPeerId)
+    let center = await videoCenter(bruna)
+    await pointUntil(bruna, center.x, center.y, async () => {
+      await expect(markerOnLeo).toHaveCount(1, { timeout: 2_000 })
+    })
+
+    // RF-18: troca para a transmissao do Joao e volta para a do Leo.
+    await expect(thumbJoao).toBeVisible({ timeout: TIMEOUTS.media })
+    await thumbJoao.click()
+    await expect(participantCard(joao, BRUNA)).toContainText(JOAO, { timeout: TIMEOUTS.room })
+    const markerOnJoao = await overlayMarker(joao, brunaPeerId)
+    center = await videoCenter(bruna)
+    await pointUntil(bruna, center.x, center.y, async () => {
+      await expect(markerOnJoao).toHaveCount(1, { timeout: 2_000 })
+    })
+    await thumbLeo.click()
+    await expect(participantCard(leo, BRUNA)).toContainText(LEO, { timeout: TIMEOUTS.room })
+    center = await videoCenter(bruna)
+    await pointUntil(bruna, center.x, center.y, async () => {
+      await expect(markerOnLeo).toHaveCount(1, { timeout: 2_000 })
+    })
+
+    // O Joao TAMBEM assiste o Leo e aponta: a camada da Bruna passa a desenhar
+    // um marcador de verdade, e nao so a caixa vazia.
+    const joaoThumbLeo = joao.page.getByTestId('stream-thumb').filter({ hasText: LEO })
+    await expect(joaoThumbLeo).toBeVisible({ timeout: TIMEOUTS.media })
+    await joaoThumbLeo.click()
+    await expect(joao.page.getByTestId('player-controls')).toBeVisible({ timeout: TIMEOUTS.media })
+    await expect(participantCard(leo, JOAO)).toContainText(LEO, { timeout: TIMEOUTS.room })
+    const joaoPeerId = await selfPeerIdOf(joao)
+    const joaoCenter = await videoCenter(joao)
+    const joaoMarkerOnBruna = bruna.page.locator(
+      `[data-testid="cursor-marker"][data-peer-id="${joaoPeerId}"]`
+    )
+    await pointUntil(joao, joaoCenter.x, joaoCenter.y, async () => {
+      await expect(joaoMarkerOnBruna).toHaveCount(1, { timeout: 2_000 })
+    })
+
+    // RF-27/RF-28: o transmissor desliga e religa os ponteiros, com os dois
+    // espectadores apontando. Cada ciclo derruba e sobe a janela de overlay e
+    // desmonta e remonta a camada inteira na tela dos dois.
+    const barToggle = leo.page.getByTestId('pointer-toggle-bar')
+    for (let round = 0; round < 4; round += 1) {
+      await barToggle.click()
+      await expect(barToggle).toHaveAttribute('aria-checked', 'false')
+      await expectNoPointerOverlay(leo)
+      await expect(bruna.page.getByTestId('cursor-layer')).toHaveCount(0)
+      await barToggle.click()
+      await expect(barToggle).toHaveAttribute('aria-checked', 'true')
+      await pointerOverlayPage(leo)
+      await joao.page.mouse.move(joaoCenter.x + round, joaoCenter.y + round)
+    }
+    markerOnLeo = await overlayMarker(leo, brunaPeerId)
+    center = await videoCenter(bruna)
+    await pointUntil(bruna, center.x, center.y, async () => {
+      await expect(markerOnLeo).toHaveCount(1, { timeout: 2_000 })
+    })
+
+    // RF-29: o Joao sai da sala enquanto aponta. O marcador dele cai da camada
+    // da Bruna pela poda de roster, sem depender de nenhum CURSOR_END.
+    await joao.page.mouse.move(joaoCenter.x + 9, joaoCenter.y + 9)
+    await closeInstance(joao)
+    joao = null
+    await expect(joaoMarkerOnBruna).toHaveCount(0, { timeout: 15_000 })
+
+    // RF-20: perde o foco e o ponteiro para na hora; recupera o foco, mexe o
+    // mouse, e o ponteiro VOLTA. A retomada e o que a rodada de teste nao tinha
+    // conseguido confirmar (ACHADO F1).
+    for (let round = 0; round < 3; round += 1) {
+      await bruna.page.evaluate("window.dispatchEvent(new Event('blur'))")
+      await expect(markerOnLeo).toHaveCount(0, { timeout: 15_000 })
+      await bruna.page.evaluate("window.dispatchEvent(new Event('focus'))")
+      center = await videoCenter(bruna)
+      await pointUntil(bruna, center.x, center.y, async () => {
+        await expect(markerOnLeo).toHaveCount(1, { timeout: 5_000 })
+      })
+    }
+
+    /*
+     * O AC-25 NAO mora nesta sessao de proposito, e a razao foi medida: o
+     * esmaecimento exige a espectadora PARADA por mais de `CURSOR_IDLE_MS`, e
+     * uma janela que perde o foco nesse intervalo tem o ponteiro encerrado pelo
+     * RF-20, o que APAGA a entrada no transmissor em vez de deixa-la inativa.
+     * Com tres instancias e as janelas de overlay sempre-no-topo disputando o
+     * foco do sistema, isso acontecia de vez em quando e o teste acusava um
+     * defeito que nao existe. O AC-25 fica no teste seguinte, com duas
+     * instancias e sem nada para roubar o foco.
+     *
+     * `expectNoDirectionFallbacks` tambem nao cabe aqui: o Joao sai da sala no
+     * meio, e a chamada de midia que ele nao atende mais faz o outro lado puxar
+     * a stream na direcao contraria. O fallback dispara por causa do roteiro, e
+     * nao por rede doente.
+     */
+    await stopTransmission(leo)
+    await expectNoPointerOverlay(leo)
+    expect(crashes, 'excecao nao tratada em alguma janela do app').toEqual([])
+  })
+
+  /*
+   * AC-25/RF-26: parada, a seta ESMAECE sem sair da pagina; ao mexer, volta
+   * pelo mesmo caminho. Duas instancias e nada mais acontecendo: o esmaecimento
+   * so e observavel com a espectadora imovel por mais de `CURSOR_IDLE_MS`, e
+   * qualquer evento no meio (perda de foco, troca de transmissao, toggle)
+   * encerraria o ponteiro pelo RF-20 e apagaria a entrada, que e um resultado
+   * CERTO do produto e um falso negativo para este teste.
+   *
+   * A medicao e por `opacity` computado, nunca por presenca no DOM: o marcador
+   * inativo CONTINUA na pagina, entao contar elemento jamais provaria o
+   * esmaecimento (e foi assim que o AC-25 ficou sem cobertura ate agora).
+   */
+  test('o marcador parado esmaece sem sair do DOM e volta ao mexer', async () => {
+    const code = uniqueRoomCode('ptr')
+    leo = await launchInstance('A', LEO)
+    await createRoom(leo, code)
+    bruna = await launchInstance('B', BRUNA)
+    await joinRoom(bruna, code)
+    await expectRoster(leo, [LEO, BRUNA])
+
+    await startTransmission(leo, { pointers: true })
+    await pointerOverlayPage(leo)
+
+    await openPlayer(bruna)
+    await expect(participantCard(leo, BRUNA)).toContainText(LEO, { timeout: TIMEOUTS.room })
+
+    const brunaPeerId = await selfPeerIdOf(bruna)
+    const marker = await overlayMarker(leo, brunaPeerId)
+    const center = await videoCenter(bruna)
+    await pointUntil(bruna, center.x, center.y, async () => {
+      await expect(marker).toHaveCount(1, { timeout: 2_000 })
+    })
+
+    // A partir daqui ninguem mexe o mouse. `'ausente'` na mensagem de falha e o
+    // sinal de que o ponteiro foi ENCERRADO (RF-20) em vez de esmaecer, que e
+    // um diagnostico diferente de "nao esmaeceu".
+    await expect
+      .poll(() => overlayMarkerOpacity(leo!, brunaPeerId), {
+        message: 'o marcador parado deveria esmaecer sem sair do DOM (AC-25)',
+        timeout: CURSOR_IDLE_MS * 3
+      })
+      .toBe('0')
+    await expect(marker, 'esmaecer nao pode significar sair do DOM').toHaveCount(1)
+
+    // Mexer de novo traz a seta de volta pelo mesmo caminho (RF-26).
+    await pointUntil(bruna, center.x, center.y, async () => {
+      expect(await overlayMarkerOpacity(leo!, brunaPeerId)).toBe('1')
+    })
+
+    await stopTransmission(leo)
+    await expectNoPointerOverlay(leo)
+    expectNoDirectionFallbacks([leo, bruna])
   })
 })
 
