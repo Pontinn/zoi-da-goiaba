@@ -10,6 +10,9 @@ import {
   type CaptureListSourcesRequest,
   type CaptureSelectSourceRequest,
   type CaptureSource,
+  type PointerOverlayFrame,
+  type PointerOverlayShowRequest,
+  type PointerOverlayShowResult,
   type SettingsSetRequest,
   type UpdateStatus,
   type ZoiApi
@@ -62,6 +65,26 @@ const api: ZoiApi = {
       ipcRenderer.on(IPC.audioExclusionStatus, handler)
       return () => {
         ipcRenderer.removeListener(IPC.audioExclusionStatus, handler)
+      }
+    }
+  },
+  // UM SO preload serve as duas janelas (a principal e a de overlay): expor
+  // `onRender` tambem na principal e inofensivo, porque o main nunca envia
+  // `pointer-overlay:render` para ela, e evita um segundo arquivo de preload e
+  // uma segunda entry de build.
+  pointerOverlay: {
+    show: (request: PointerOverlayShowRequest): Promise<PointerOverlayShowResult> =>
+      ipcRenderer.invoke(IPC.pointerOverlayShow, request),
+    hide: (): Promise<void> => ipcRenderer.invoke(IPC.pointerOverlayHide),
+    sendFrame: (frame: PointerOverlayFrame): void => {
+      ipcRenderer.send(IPC.pointerOverlayFrame, frame)
+    },
+    onRender: (listener: (frame: PointerOverlayFrame) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, frame: PointerOverlayFrame): void =>
+        listener(frame)
+      ipcRenderer.on(IPC.pointerOverlayRender, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.pointerOverlayRender, handler)
       }
     }
   },

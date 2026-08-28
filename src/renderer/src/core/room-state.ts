@@ -56,6 +56,11 @@ export interface TransmissionState {
   status: TransmissionStatus
   /** Codec anunciado pelo transmissor; null = versao antiga ou nao informado. */
   videoCodec: VideoCodecId | null
+  /**
+   * Ponteiros dos espectadores ligados nesta transmissao. `false` tambem para
+   * transmissao de cliente antigo (campo ausente no TX_START). NUNCA persistido.
+   */
+  pointersEnabled: boolean
 }
 
 export interface QualitySample {
@@ -222,6 +227,14 @@ export interface LocalTxStartEvent {
   sourceLabel: string
   /** Codec escolhido para esta transmissao (RF-01). */
   videoCodec: VideoCodecId
+  /** Ponteiros dos espectadores ligados ja no inicio (RF-01). */
+  pointers: boolean
+  now: number
+}
+
+export interface LocalTxPointersEvent {
+  kind: 'LOCAL_TX_POINTERS'
+  on: boolean
   now: number
 }
 
@@ -262,6 +275,7 @@ export type RoomEvent =
   | OwnerRemoveEvent
   | LocalNicknameEvent
   | LocalTxStartEvent
+  | LocalTxPointersEvent
   | LocalTxStopEvent
   | LocalWatchingEvent
   | LocalQualityEvent
@@ -293,6 +307,21 @@ export function viewersOf(state: RoomState, txId: string): number {
     if (watchingTxId === txId) count += 1
   }
   return count
+}
+
+/**
+ * peerIds das pessoas que estao assistindo `txId` agora. Mesma FONTE de dados de
+ * `viewersOf` (`state.watching`), sem nada novo no mesh, mas iteracao DIFERENTE:
+ * `viewersOf` usa `Object.values` porque so conta; aqui e preciso a CHAVE, entao
+ * o laco e sobre `Object.entries(state.watching)` coletando `peerId` quando o
+ * valor bate com `txId`. Copiar o `Object.values` devolveria txIds, nao peerIds.
+ */
+export function viewerPeerIdsOf(state: RoomState, txId: string): string[] {
+  const peerIds: string[] = []
+  for (const [peerId, watchingTxId] of Object.entries(state.watching)) {
+    if (watchingTxId === txId) peerIds.push(peerId)
+  }
+  return peerIds
 }
 
 function withLink(
@@ -386,6 +415,8 @@ export function reduce(state: RoomState, event: RoomEvent): ReducerResult {
       return applyLocalNickname(state, event)
     case 'LOCAL_TX_START':
       return applyLocalTxStart(state, event)
+    case 'LOCAL_TX_POINTERS':
+      return applyLocalTxPointers(state, event)
     case 'LOCAL_TX_STOP':
       return applyLocalTxStop(state, event)
     case 'LOCAL_WATCHING':
@@ -571,6 +602,7 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
       // esta regra a sala inteira ouviria o som "transmitindo" a cada
       // rebaixamento. `startedAt` e `status` sao preservados de proposito.
       const known = state.transmissions[payload.txId]
+      const nextPointers = payload.pointers === true
       if (known && known.peerId === from) {
         return {
           state: {
@@ -583,11 +615,26 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
                 hasAudio: payload.hasAudio,
                 sourceKind: payload.sourceKind,
                 sourceLabel: payload.sourceLabel,
-                videoCodec
+                videoCodec,
+                pointersEnabled: nextPointers
               }
             }
           },
-          effects: []
+          // RF-27/RF-28: o aviso e disparado pela TRANSICAO `true -> false`, e
+          // so para quem esta assistindo AQUELA transmissao. Um reenvio que
+          // reafirma `false` (reconexao, entrada de membro, roster) encontra o
+          // valor ja em `false`, nao ha transicao e nenhum toast sai. Este e o
+          // guard de deduplicacao inteiro: nao ha flag nova a podar.
+          effects:
+            known.pointersEnabled && !nextPointers && state.selfWatchingTxId === payload.txId
+              ? [
+                  {
+                    kind: 'showToast',
+                    tone: 'warning',
+                    text: 'Ponteiros desativados por quem transmite.'
+                  }
+                ]
+              : []
         }
       }
       // RF-18: TX_START novo do mesmo peer substitui o anterior.
@@ -605,7 +652,8 @@ function applyMessage(state: RoomState, event: MessageEvent): ReducerResult {
         sourceLabel: payload.sourceLabel,
         startedAt: payload.startedAt,
         status: 'live',
-        videoCodec
+        videoCodec,
+        pointersEnabled: nextPointers
       }
       const selfWatchingTxId = previous.includes(state.selfWatchingTxId ?? '')
         ? null
@@ -1413,7 +1461,8 @@ function applyLocalTxStart(state: RoomState, event: LocalTxStartEvent): ReducerR
     // acompanha rebaixamentos (o transmissor nao redispara LOCAL_TX_START para
     // nao repetir o som "transmitindo" nele mesmo). A verdade local vive no
     // MediaManager; nos espectadores o campo fica atual pelo reanuncio.
-    videoCodec: event.videoCodec
+    videoCodec: event.videoCodec,
+    pointersEnabled: event.pointers
   }
   return {
     state: { ...state, transmissions },
@@ -1429,11 +1478,59 @@ function applyLocalTxStart(state: RoomState, event: LocalTxStartEvent): ReducerR
             sourceKind: event.sourceKind,
             sourceLabel: event.sourceLabel,
             startedAt: event.now,
-            videoCodec: event.videoCodec
+            videoCodec: event.videoCodec,
+            pointers: event.pointers
           }
         }
       },
       { kind: 'playSound', sound: 'transmitting' }
+    ]
+  }
+}
+
+/**
+ * Liga ou desliga os ponteiros da transmissao LOCAL (RF-02/RF-27). Evento raro,
+ * entao ele passa pelo reducer normalmente (ao contrario das POSICOES, que sao
+ * de alta frequencia e vivem fora dele). O reanuncio pega carona no caminho de
+ * TX_START idempotente que ja existe: nenhum som e nenhum toast do lado de quem
+ * liga.
+ */
+function applyLocalTxPointers(state: RoomState, event: LocalTxPointersEvent): ReducerResult {
+  const own = transmissionsOf(state, state.selfPeerId)
+  const transmission = own[0]
+  if (!transmission) return { state, effects: [] }
+  // RF-04 defensivo: compartilhamento de JANELA nunca tem ponteiro.
+  const on = transmission.sourceKind === 'window' ? false : event.on
+  if (transmission.pointersEnabled === on) return { state, effects: [] }
+  return {
+    state: {
+      ...state,
+      transmissions: {
+        ...state.transmissions,
+        [transmission.txId]: { ...transmission, pointersEnabled: on }
+      }
+    },
+    effects: [
+      {
+        kind: 'broadcast',
+        message: {
+          type: 'TX_START',
+          payload: {
+            txId: transmission.txId,
+            presetId: transmission.presetId,
+            hasAudio: transmission.hasAudio,
+            sourceKind: transmission.sourceKind,
+            sourceLabel: transmission.sourceLabel,
+            startedAt: transmission.startedAt,
+            // `TransmissionState.videoCodec` e `VideoCodecId | null` e
+            // `TxStartPayload.videoCodec` e `string | undefined`: mandar `null`
+            // faria `isTxStartPayload` rejeitar o payload INTEIRO e o reanuncio
+            // sumiria em silencio, levando o toggle junto.
+            videoCodec: transmission.videoCodec ?? undefined,
+            pointers: on
+          }
+        }
+      }
     ]
   }
 }

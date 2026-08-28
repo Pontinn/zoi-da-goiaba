@@ -1,6 +1,7 @@
 // Tela 4 do UISPEC (Sala): barra de transmissao, sidebar de participantes com
 // badges, grade de miniaturas ao vivo, fluxo de transmitir e moderacao do dono.
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { colorOfSlot, resolvePersonSlots, type PersonColor } from '@shared/person-colors'
 import { PRESETS } from '@shared/presets'
 import { isOwner as computeIsOwner, nicknameOf, viewersOf } from '../../core/room-state'
 import {
@@ -22,6 +23,9 @@ import { TransmittingBar } from '../components/TransmittingBar'
 import { BroadcastIcon, CheckIcon, CopyIcon, GearIcon, LogoutIcon } from '../components/icons'
 import { copyText } from '../clipboard'
 import { PlayerView } from './PlayerView'
+
+/** Corrida de render: um membro fora do mapa ainda desenha, com o slot 0. */
+const FALLBACK_PERSON_COLOR = colorOfSlot(0)
 
 export function RoomScreen(): JSX.Element {
   const room = useRoomStore((state) => state.room)
@@ -46,6 +50,10 @@ export function RoomScreen(): JSX.Element {
   // transmissao: assim uma transmissao nova ja nasce desligada na renderizacao,
   // sem o render intermediario (e a regra de lint) de um setState em efeito.
   const [sharpnessOfTx, setSharpnessOfTx] = useState<{ txId: string; on: boolean } | null>(null)
+  // Ponteiros dos espectadores: mesmo escopo e mesmo molde do modo nitidez. O
+  // txId fica GUARDADO junto do valor para uma transmissao nova ja nascer
+  // desligada na renderizacao, sem um setState em efeito.
+  const [pointersOfTx, setPointersOfTx] = useState<{ txId: string; on: boolean } | null>(null)
 
   const iAmOwner = computeIsOwner(room)
   const code = room.roomMeta?.code ?? ''
@@ -65,6 +73,18 @@ export function RoomScreen(): JSX.Element {
     }
     return labels
   }, [room.watching, room.transmissions, room.members])
+
+  /**
+   * Cores PRONTAS por pessoa (RF-21/RF-22). Memoizar so os slots e chamar
+   * `colorOfSlot` dentro do `map` do JSX criaria um objeto novo a cada render e
+   * anularia o `memo` do `ParticipantCard`, re-renderizando a lista inteira.
+   */
+  const personColors = useMemo(() => {
+    const slots = resolvePersonSlots(room.members)
+    const out: Record<string, PersonColor> = {}
+    for (const member of room.members) out[member.peerId] = colorOfSlot(slots[member.peerId] ?? 0)
+    return out
+  }, [room.members])
 
   const selected = selectedTxId === null ? null : (room.transmissions[selectedTxId] ?? null)
   /**
@@ -113,6 +133,7 @@ export function RoomScreen(): JSX.Element {
   const localTxId = localTx?.txId ?? null
   // Vale so para a transmissao que esta no ar: qualquer txId novo le desligado.
   const sharpness = sharpnessOfTx !== null && sharpnessOfTx.txId === localTxId && sharpnessOfTx.on
+  const pointers = pointersOfTx !== null && pointersOfTx.txId === localTxId && pointersOfTx.on
 
   const changeSharpness = useCallback(
     (next: boolean): void => {
@@ -125,6 +146,26 @@ export function RoomScreen(): JSX.Element {
         // sabendo em vez de olhar um toggle que nao significa nada.
         pushToast('warning', 'Nao foi possivel mudar o modo nitidez agora.')
       }
+    },
+    [localTxId, pushToast]
+  )
+
+  /**
+   * Molde do `changeSharpness`, so que `async`: o `setPointersMode` precisa
+   * subir (ou derrubar) a janela de overlay antes de responder, e devolve
+   * `false` quando o `show` falha. Nunca deixar o switch ligado com o overlay
+   * caido: o retorno manda no controle.
+   */
+  const changePointers = useCallback(
+    async (next: boolean): Promise<void> => {
+      if (!localTxId) return
+      const ok = await mediaManager.setPointersMode(next)
+      if (ok) {
+        setPointersOfTx({ txId: localTxId, on: next })
+        return
+      }
+      setPointersOfTx({ txId: localTxId, on: false })
+      pushToast('warning', 'Nao foi possivel abrir a camada de ponteiros agora.')
     },
     [localTxId, pushToast]
   )
@@ -160,6 +201,8 @@ export function RoomScreen(): JSX.Element {
           : await mediaManager.startTransmission(choice)
       refreshLocalTransmission()
       setPicker('closed')
+      // O switch da barra ja nasce coerente com o do modal (caminho da F1.1).
+      setPointersOfTx({ txId: transmission.txId, on: transmission.pointers })
       if (choice.withAudio && !transmission.hasAudio) {
         pushToast(
           'warning',
@@ -169,6 +212,14 @@ export function RoomScreen(): JSX.Element {
         pushToast(
           'warning',
           'Nao foi possivel isolar o audio do Discord; a transmissao segue com o som do sistema inteiro.'
+        )
+      }
+      // O `startTransmission` ja resolveu o `setPointersMode`, entao este valor
+      // e final: pediu ponteiros e nao veio = o overlay nao subiu (B3.2).
+      if (choice.pointers && !transmission.pointers) {
+        pushToast(
+          'warning',
+          'Nao foi possivel abrir a camada de ponteiros; a transmissao segue sem eles.'
         )
       }
     } catch (error) {
@@ -209,6 +260,9 @@ export function RoomScreen(): JSX.Element {
           hasAudio={localTx.hasAudio}
           sharpness={sharpness}
           onSharpnessChange={changeSharpness}
+          pointers={pointers}
+          pointersDisabled={localTx.sourceKind === 'window'}
+          onPointersChange={(next) => void changePointers(next)}
           onSwitch={() => setPicker('switch')}
           onStop={stopTransmission}
         />
@@ -271,6 +325,7 @@ export function RoomScreen(): JSX.Element {
                 nickname={member.nickname}
                 isSelf={member.peerId === room.selfPeerId}
                 isOwner={member.isOwner}
+                color={personColors[member.peerId] ?? FALLBACK_PERSON_COLOR}
                 canModerate={iAmOwner}
                 transmitting={transmittingPeers.has(member.peerId)}
                 watchingLabel={watchingLabels[member.peerId] ?? null}
@@ -319,6 +374,9 @@ export function RoomScreen(): JSX.Element {
                 quality={room.quality[selected.peerId]}
                 qualityTick={qualityTick}
                 videoStats={inboundVideoStats.get(selected.txId)}
+                pointersEnabled={selected.pointersEnabled}
+                members={room.members}
+                selfPeerId={room.selfPeerId}
                 onBack={() => selectTransmission(null)}
               />
               {transmissions.length > 1 ? (

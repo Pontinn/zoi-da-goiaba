@@ -2,6 +2,7 @@
 // olho de "assistindo", ponto danger de "transmitindo" e acoes de moderacao
 // (apenas para o dono, nunca no proprio card, RF-34/AC-19).
 import { memo, useEffect, useRef, useState } from 'react'
+import type { PersonColor } from '@shared/person-colors'
 import type { PeerLinkStatus, QualitySample } from '../../core/room-state'
 import { ConnectionBars } from './ConnectionBars'
 import { IconButton } from './Button'
@@ -12,6 +13,8 @@ export interface ParticipantCardProps {
   nickname: string
   isSelf: boolean
   isOwner: boolean
+  /** Cor desta pessoa (RF-21/RF-22): a MESMA do cursor dela sobre o video. */
+  color: PersonColor
   /** O usuario local e o dono da sala (habilita moderacao). */
   canModerate: boolean
   transmitting: boolean
@@ -29,6 +32,7 @@ export const ParticipantCard = memo(function ParticipantCard({
   nickname,
   isSelf,
   isOwner,
+  color,
   canModerate,
   transmitting,
   watchingLabel,
@@ -62,7 +66,11 @@ export const ParticipantCard = memo(function ParticipantCard({
 
   return (
     <div className={classes} ref={cardRef} data-testid="participant" data-peer-id={peerId}>
-      <span className="z-participant__avatar" aria-hidden="true">
+      <span
+        className="z-participant__avatar"
+        aria-hidden="true"
+        style={{ background: color.soft, color: color.fill }}
+      >
         {nickname.trim().charAt(0) || '?'}
       </span>
 

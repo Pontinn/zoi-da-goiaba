@@ -149,6 +149,17 @@ export interface MediaHooks {
   teardown(): void
 }
 
+/**
+ * Ganchos de CURSOR. Mesmo molde de `MediaHooks`: a sessao nao conhece o
+ * hub de posicoes; quem se registra e ele (a dependencia e sempre ao contrario).
+ */
+export interface CursorHooks {
+  /** CURSOR_MOVE ou CURSOR_END recebido pelo mesh. Nunca passa pelo reducer. */
+  onCursorMessage(from: string, message: ProtocolMessage): void
+  /** Chamado no `teardown`. Preserva a porta do hub. */
+  reset(): void
+}
+
 export interface CreateRoomOptions {
   code: string
   limit: number
@@ -185,6 +196,11 @@ function onSystemResume(listener: () => void): (() => void) | null {
   return api?.system?.onResume?.(listener) ?? null
 }
 
+const noopCursorHooks: CursorHooks = {
+  onCursorMessage: () => {},
+  reset: () => {}
+}
+
 const noopMediaHooks: MediaHooks = {
   onMemberJoined: () => {},
   onPeerRecovered: () => {},
@@ -202,6 +218,7 @@ export class Session {
   private nickname = ''
   private installId = ''
   private mediaHooks: MediaHooks = noopMediaHooks
+  private cursorHooks: CursorHooks = noopCursorHooks
 
   private readonly stateListeners = new Set<StateListener>()
   private readonly toastListeners = new Set<ToastListener>()
@@ -362,6 +379,10 @@ export class Session {
     this.mediaHooks = hooks
   }
 
+  setCursorHooks(hooks: CursorHooks): void {
+    this.cursorHooks = hooks
+  }
+
   setIdentity(nickname: string, installId: string): void {
     this.nickname = nickname
     this.installId = installId
@@ -482,6 +503,11 @@ export class Session {
     this.dispatch({ kind: 'LOCAL_WATCHING', txId, now: Date.now() })
   }
 
+  /** Liga ou desliga os ponteiros dos espectadores na transmissao local (RF-02). */
+  setTransmissionPointers(on: boolean): void {
+    this.dispatch({ kind: 'LOCAL_TX_POINTERS', on, now: Date.now() })
+  }
+
   /** Usado pelo media-manager (Sprint 5) para anunciar TX_START/TX_STOP. */
   announceTransmissionStart(payload: {
     txId: string
@@ -491,6 +517,8 @@ export class Session {
     sourceLabel: string
     /** Codec escolhido para esta transmissao; viaja no TX_START (RF-01). */
     videoCodec: VideoCodecId
+    /** Ponteiros dos espectadores ligados ja no inicio (RF-01). */
+    pointers: boolean
   }): void {
     this.dispatch({ kind: 'LOCAL_TX_START', ...payload, now: Date.now() })
   }
@@ -508,6 +536,15 @@ export class Session {
 
   sendTo(peerId: string, message: ProtocolMessage): void {
     this.mesh.send(peerId, message)
+  }
+
+  /**
+   * Envia para um SUBCONJUNTO de pares (fan-out por transmissao, RNF-01). E a
+   * assinatura que faz `Session` satisfazer `CursorSessionPort` de forma
+   * estrutural, sem `implements` e sem import cruzado.
+   */
+  sendCursor(peerIds: readonly string[], message: ProtocolMessage): void {
+    this.mesh.sendMany(peerIds, message)
   }
 
   /** Chamada de midia para um membro, com o txId no metadata (Sprint 5). */
@@ -908,6 +945,14 @@ export class Session {
       this.reconnection.handlePong(from, message.payload.seq)
       return
     }
+    // Posicao de cursor nao passa pelo reducer: e dado efemero de alta
+    // frequencia (ate 25 por segundo por espectador). As checagens de confianca
+    // vivem no hub, e o descarte la e silencioso e sem efeito colateral: nunca
+    // `rejectFrom`, nunca `closeConnection`.
+    if (message.type === 'CURSOR_MOVE' || message.type === 'CURSOR_END') {
+      this.cursorHooks.onCursorMessage(from, message)
+      return
+    }
     this.dispatch({ kind: 'MESSAGE', from, message, now: Date.now() })
   }
 
@@ -1179,6 +1224,7 @@ export class Session {
     this.inboundCodecLog.clear()
     this.reconnection.destroy()
     this.mediaHooks.teardown()
+    this.cursorHooks.reset()
     this.mesh.closeAll()
     this.peerManager.destroy()
     this.rttByPeer.clear()

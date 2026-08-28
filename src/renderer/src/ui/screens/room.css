@@ -223,6 +223,13 @@
   border-color: #3a2f4c;
 }
 
+/*
+ * A cor EFETIVA vem de `@shared/person-colors` por `style` inline (RF-21/RF-22),
+ * que vence esta folha. O par `--accent-soft`/`--accent-hover` fica como
+ * FALLBACK, para o caso de um consumidor futuro esquecer a prop `color`. A
+ * geometria (34x34, `flex: none`, raio 50%, peso 600, uppercase, tamanho de
+ * fonte herdado) e restricao a PRESERVAR, nao alvo de mudanca.
+ */
 .z-participant__avatar {
   flex: none;
   display: inline-flex;
@@ -599,6 +606,22 @@
   background: var(--bg-hover);
 }
 
+/*
+ * Formula COMPLETA do `.z-btn:disabled` (`components.css:32-36`), as tres
+ * declaracoes: o `transform: none` neutraliza qualquer deslocamento de hover ou
+ * de clique. Vale para o botao inteiro, entao trilho, thumb e rotulo esmaecem
+ * juntos. O `:hover` fica travado para o controle desabilitado nao "acender".
+ */
+.z-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.z-switch:disabled:hover {
+  background: var(--bg-elevated);
+}
+
 .z-switch__track {
   position: relative;
   width: 38px;
@@ -661,6 +684,15 @@
 }
 
 .z-switch--bar:hover {
+  background: transparent;
+}
+
+/*
+ * A barra nao tem superficie propria: sem esta regra, o `.z-switch:disabled:hover`
+ * generico pintaria `--bg-elevated` por cima do fundo `--danger` solido. So o
+ * esmaecimento vale aqui.
+ */
+.z-switch--bar:disabled:hover {
   background: transparent;
 }
 

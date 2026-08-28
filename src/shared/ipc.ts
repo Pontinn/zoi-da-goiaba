@@ -15,7 +15,11 @@ export const IPC = {
   audioExclusionStart: 'audio-exclusion:start',
   audioExclusionStop: 'audio-exclusion:stop',
   audioExclusionStatus: 'audio-exclusion:status',
-  audioExclusionPort: 'audio-exclusion:port'
+  audioExclusionPort: 'audio-exclusion:port',
+  pointerOverlayShow: 'pointer-overlay:show',
+  pointerOverlayHide: 'pointer-overlay:hide',
+  pointerOverlayFrame: 'pointer-overlay:frame',
+  pointerOverlayRender: 'pointer-overlay:render'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -136,6 +140,44 @@ export interface AudioExclusionPcmMessage {
 }
 
 // ---------------------------------------------------------------------------
+// pointer-overlay
+// ---------------------------------------------------------------------------
+
+/** Um ponteiro ja resolvido para desenho: nickname e cor vem do renderer principal. */
+export interface PointerOverlayPointer {
+  peerId: string
+  nickname: string
+  /**
+   * Cor de PREENCHIMENTO ja resolvida, no formato `hsl(H 100% L%)`. E o campo
+   * `fill` de `PersonColor`, e nao o objeto inteiro: a janela de overlay nao tem
+   * roster nem desenha avatar, entao o `soft` nao serve para nada la.
+   */
+  fill: string
+  /** Fracao [0..1] da largura/altura do monitor compartilhado. */
+  x: number
+  y: number
+  /** Parado ha mais de CURSOR_IDLE_MS: o overlay desenha esmaecido (RF-26). */
+  idle: boolean
+}
+
+export interface PointerOverlayFrame {
+  txId: string
+  pointers: PointerOverlayPointer[]
+}
+
+export interface PointerOverlayShowRequest {
+  /** `displayId` da fonte escolhida (`CaptureSource.displayId`). */
+  displayId: string | null
+}
+
+export type PointerOverlayShowResult =
+  | { ok: true }
+  | { ok: false; reason: 'display-not-found' | 'content-protection-failed' | 'window-failed' }
+
+/** Titulo fixo da janela de overlay; e por ele que o e2e a encontra. */
+export const POINTER_OVERLAY_TITLE = 'zoi-pointer-overlay'
+
+// ---------------------------------------------------------------------------
 // Superficie exposta no renderer como `window.zoi`
 // ---------------------------------------------------------------------------
 
@@ -174,6 +216,16 @@ export interface ZoiApi {
     stop(): Promise<void>
     /** Registra listener de `audio-exclusion:status`; retorna o descarte. */
     onStatus(listener: (status: AudioExclusionStatus) => void): () => void
+  }
+  pointerOverlay: {
+    /** Sobe o overlay sobre o monitor da fonte. Nunca lanca: falha vira `{ ok: false }`. */
+    show(request: PointerOverlayShowRequest): Promise<PointerOverlayShowResult>
+    /** Derruba o overlay. Idempotente. */
+    hide(): Promise<void>
+    /** Entrega um frame agregado ao overlay. Fire and forget, sem resposta. */
+    sendFrame(frame: PointerOverlayFrame): void
+    /** SO a janela de overlay usa. Registra o listener; devolve o descarte. */
+    onRender(listener: (frame: PointerOverlayFrame) => void): () => void
   }
   system: {
     /**

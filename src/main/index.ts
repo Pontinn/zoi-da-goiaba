@@ -6,6 +6,7 @@ import { registerAudioExclusionWindow, stopAudioExclusion } from './audio-exclus
 import { registerDisplayMediaHandler } from './capture'
 import { attachRendererLogging, logToFile, startFileLogger } from './file-logger'
 import { registerIpcHandlers } from './ipc-handlers'
+import { registerPointerOverlay } from './pointer-overlay'
 import { registerUpdaterIpc, startUpdater } from './updater'
 
 // Token --bg-app do UISPEC: pintar a janela antes do primeiro frame evita flash branco.
@@ -130,6 +131,9 @@ if (!gotTheLock) {
     registerDisplayMediaHandler()
 
     mainWindow = createWindow()
+    // Depois de `createWindow` de proposito: o gancho de janela orfa precisa da
+    // janela principal ja existente para assinar o `closed` dela.
+    registerPointerOverlay(() => mainWindow)
     // Updater so entra em acao no app empacotado (RF-43).
     mainWindow.once('ready-to-show', () => startUpdater())
 

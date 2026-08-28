@@ -4,13 +4,15 @@ import type {
   JoinAcceptPayload,
   RosterMember,
   RosterUpdatePayload,
-  ProtocolMessage
+  ProtocolMessage,
+  TxStartPayload
 } from '@shared/protocol'
 import type { SoundId } from '@shared/sounds'
 import {
   createInitialState,
   reduce,
   reduceAll,
+  viewerPeerIdsOf,
   viewersOf,
   type Effect,
   type RoomEvent,
@@ -450,6 +452,7 @@ describe('room-state / transmissoes', () => {
       sourceKind: 'window',
       sourceLabel: 'VLC',
       videoCodec: 'VP8',
+      pointers: false,
       now: 40
     })
     expect(broadcasts(started.effects)[0]).toMatchObject({ type: 'TX_START' })
@@ -475,6 +478,7 @@ describe('room-state / transmissoes', () => {
       sourceKind: 'screen',
       sourceLabel: 'Tela 1',
       videoCodec: 'VP8',
+      pointers: false,
       now: 40
     })
     expect(before.transmissions).toEqual({})
@@ -1087,6 +1091,7 @@ describe('room-state / OWNER_ADMIT e SELF_LEAVE', () => {
       sourceKind: 'screen',
       sourceLabel: 'Tela 1',
       videoCodec: 'VP8',
+      pointers: false,
       now: 10
     }).state
     const result = reduce(transmitting, { kind: 'SELF_LEAVE', now: 1_000 })
@@ -1602,5 +1607,220 @@ describe('room-state / TX_START idempotente (reanuncio de codec)', () => {
     // Transmissao de outro dono: caminho normal, com som, e nao atualizacao.
     expect(forged.state.transmissions['tx1']?.peerId).toBe('outro')
     expect(sounds(forged.effects)).toEqual(['transmitting'])
+  })
+})
+
+// --- toggle de ponteiros da viewer-cursors (RF-27/RF-28/RNF-06) -------------
+//
+// O toast do espectador e disparado pela TRANSICAO `true -> false`, nunca pela
+// chegada da mensagem. E isso, e so isso, que resolve a deduplicacao de RF-28:
+// reconexao, entrada de membro e atualizacao de roster reenviam o mesmo
+// TX_START, encontram o valor ja em `false` e nao produzem toast nenhum.
+
+describe('room-state / toggle de ponteiros', () => {
+  const roster = [member('owner', 1, true), member('me', 2), member('outro', 3)]
+
+  function base(selfWatchingTxId: string | null = null): RoomState {
+    const state = joinedState('me', roster, 'owner', 4)
+    return { ...state, selfWatchingTxId }
+  }
+
+  function txStart(from: string, pointers: boolean | undefined, now = 5_000): RoomEvent {
+    const payload: TxStartPayload = {
+      txId: 'tx1',
+      presetId: 'p720_30',
+      hasAudio: false,
+      sourceKind: 'screen',
+      sourceLabel: 'Tela 1',
+      startedAt: 1_000,
+      videoCodec: 'VP8',
+      // Ausente = cliente antigo: o campo nem chega a existir no payload.
+      ...(pointers === undefined ? {} : { pointers })
+    }
+    return { kind: 'MESSAGE', from, message: { type: 'TX_START', payload }, now }
+  }
+
+  function toasts(effects: readonly Effect[]): { tone: string; text: string }[] {
+    return effects
+      .filter((effect) => effect.kind === 'showToast')
+      .map((effect) => ({ tone: effect.tone, text: effect.text }))
+  }
+
+  it('TX_START com pointers grava pointersEnabled, e sem o campo grava false', () => {
+    const on = reduce(base(), txStart('owner', true))
+    expect(on.state.transmissions['tx1']?.pointersEnabled).toBe(true)
+    const off = reduce(base(), txStart('owner', false))
+    expect(off.state.transmissions['tx1']?.pointersEnabled).toBe(false)
+    // Cliente antigo: o campo nem existe no payload.
+    const legacy = reduce(base(), txStart('owner', undefined))
+    expect(legacy.state.transmissions['tx1']?.pointersEnabled).toBe(false)
+  })
+
+  it('avisa UMA vez na transicao true -> false para quem esta assistindo', () => {
+    const watching = reduce(base('tx1'), txStart('owner', true)).state
+    const first = reduce(watching, txStart('owner', false, 6_000))
+    expect(toasts(first.effects)).toEqual([
+      { tone: 'warning', text: 'Ponteiros desativados por quem transmite.' }
+    ])
+    expect(first.effects).toHaveLength(1)
+  })
+
+  it('o MESMO TX_START repetido nao avisa de novo (RF-28)', () => {
+    // Se alguem tirar o guard de transicao, este caso falha na hora.
+    const watching = reduce(base('tx1'), txStart('owner', true)).state
+    const first = reduce(watching, txStart('owner', false, 6_000))
+    const again = reduce(first.state, txStart('owner', false, 7_000))
+    expect(again.effects).toEqual([])
+  })
+
+  it('nao avisa quem NAO esta assistindo aquela transmissao', () => {
+    const other = reduce(base('tx-outra'), txStart('owner', true)).state
+    const result = reduce(other, txStart('owner', false, 6_000))
+    expect(result.effects).toEqual([])
+    expect(result.state.transmissions['tx1']?.pointersEnabled).toBe(false)
+  })
+
+  it('a transicao false -> true nao avisa ninguem', () => {
+    const watching = reduce(base('tx1'), txStart('owner', false)).state
+    const result = reduce(watching, txStart('owner', true, 6_000))
+    expect(result.effects).toEqual([])
+    expect(result.state.transmissions['tx1']?.pointersEnabled).toBe(true)
+  })
+
+  it('o reanuncio continua PRESERVANDO startedAt e status', () => {
+    const watching = reduce(base('tx1'), txStart('owner', true)).state
+    const before = watching.transmissions['tx1']
+    const after = reduce(watching, txStart('owner', false, 9_999)).state.transmissions['tx1']
+    expect(after?.startedAt).toBe(before?.startedAt)
+    expect(after?.status).toBe(before?.status)
+    expect(after?.peerId).toBe('owner')
+  })
+})
+
+describe('room-state / LOCAL_TX_POINTERS', () => {
+  const roster = [member('owner', 1, true), member('me', 2)]
+
+  function transmitting(sourceKind: 'screen' | 'window', pointers = false): RoomState {
+    return reduce(joinedState('me', roster, 'owner', 4), {
+      kind: 'LOCAL_TX_START',
+      txId: 'meu',
+      presetId: 'p720_30',
+      hasAudio: false,
+      sourceKind,
+      sourceLabel: sourceKind === 'screen' ? 'Tela 1' : 'VLC',
+      videoCodec: 'VP8',
+      pointers,
+      now: 40
+    }).state
+  }
+
+  it('sem transmissao local nao faz nada', () => {
+    const result = reduce(joinedState('me', roster, 'owner', 4), {
+      kind: 'LOCAL_TX_POINTERS',
+      on: true,
+      now: 50
+    })
+    expect(result.effects).toEqual([])
+  })
+
+  it('reanuncia TX_START com pointers e SEM som ao ligar', () => {
+    const result = reduce(transmitting('screen'), {
+      kind: 'LOCAL_TX_POINTERS',
+      on: true,
+      now: 50
+    })
+    expect(result.state.transmissions['meu']?.pointersEnabled).toBe(true)
+    expect(sounds(result.effects)).toEqual([])
+    expect(kinds(result.effects)).toEqual(['broadcast'])
+    const message = broadcasts(result.effects)[0]
+    expect(message?.type).toBe('TX_START')
+    expect(message?.payload).toEqual({
+      txId: 'meu',
+      presetId: 'p720_30',
+      hasAudio: false,
+      sourceKind: 'screen',
+      sourceLabel: 'Tela 1',
+      startedAt: 40,
+      // `null` aqui faria isTxStartPayload rejeitar o payload INTEIRO e o
+      // reanuncio sumiria em silencio, levando o toggle junto.
+      videoCodec: 'VP8',
+      pointers: true
+    })
+  })
+
+  it('e idempotente: o MESMO valor nao reanuncia nada', () => {
+    const on = reduce(transmitting('screen'), {
+      kind: 'LOCAL_TX_POINTERS',
+      on: true,
+      now: 50
+    }).state
+    expect(reduce(on, { kind: 'LOCAL_TX_POINTERS', on: true, now: 60 }).effects).toEqual([])
+    expect(reduce(transmitting('screen'), {
+      kind: 'LOCAL_TX_POINTERS',
+      on: false,
+      now: 60
+    }).effects).toEqual([])
+  })
+
+  it('forca false quando a fonte e uma JANELA (RF-04 defensivo)', () => {
+    const result = reduce(transmitting('window'), {
+      kind: 'LOCAL_TX_POINTERS',
+      on: true,
+      now: 50
+    })
+    expect(result.effects).toEqual([])
+    expect(result.state.transmissions['meu']?.pointersEnabled).toBe(false)
+  })
+
+  it('LOCAL_TX_START carrega o valor escolhido no seletor', () => {
+    expect(transmitting('screen', true).transmissions['meu']?.pointersEnabled).toBe(true)
+    const broadcast = reduce(joinedState('me', roster, 'owner', 4), {
+      kind: 'LOCAL_TX_START',
+      txId: 'meu',
+      presetId: 'p720_30',
+      hasAudio: false,
+      sourceKind: 'screen',
+      sourceLabel: 'Tela 1',
+      videoCodec: 'VP8',
+      pointers: true,
+      now: 40
+    })
+    const message = broadcasts(broadcast.effects)[0]
+    expect((message?.payload as { pointers?: boolean }).pointers).toBe(true)
+  })
+
+  it('RNF-06: o toggle nao encosta em selfWatchingTxId nem nas chaves de transmissions', () => {
+    // O carimbo de txId das POSICOES nem chega aqui (elas nao passam pelo
+    // reducer), e o toggle so pode mexer no proprio campo.
+    const before: RoomState = { ...transmitting('screen'), selfWatchingTxId: 'outra' }
+    const after = reduceAll(before, [
+      { kind: 'LOCAL_TX_POINTERS', on: true, now: 50 },
+      { kind: 'LOCAL_TX_POINTERS', on: false, now: 60 },
+      { kind: 'LOCAL_TX_POINTERS', on: true, now: 70 }
+    ])
+    expect(after.state.selfWatchingTxId).toBe('outra')
+    expect(Object.keys(after.state.transmissions)).toEqual(Object.keys(before.transmissions))
+    expect(after.state.transmissions['meu']?.txId).toBe('meu')
+  })
+})
+
+describe('room-state / viewerPeerIdsOf', () => {
+  it('devolve os peerIds de quem assiste, e nao os txIds', () => {
+    // Exemplo trabalhado de 5.C2: Leo transmite A, Bruna e Joao assistem A e
+    // Carla assiste B. Copiar o `Object.values` de `viewersOf` devolveria
+    // ['A','A','B'] em vez de peerIds, que e o erro que este caso pega.
+    const state: RoomState = {
+      ...joinedState('Leo', [member('Leo', 1, true), member('Bruna', 2), member('Joao', 3)], 'Leo'),
+      watching: { Bruna: 'A', Joao: 'A', Carla: 'B' }
+    }
+    expect(viewerPeerIdsOf(state, 'A')).toEqual(['Bruna', 'Joao'])
+    expect(viewersOf(state, 'A')).toBe(2)
+    expect(viewerPeerIdsOf(state, 'B')).toEqual(['Carla'])
+  })
+
+  it('devolve lista vazia para txId inexistente e para sala sem ninguem assistindo', () => {
+    const state = joinedState('me', [member('me', 1, true)], 'me')
+    expect(viewerPeerIdsOf(state, 'zzz')).toEqual([])
+    expect(viewerPeerIdsOf({ ...state, watching: { outro: null } }, 'A')).toEqual([])
   })
 })

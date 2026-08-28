@@ -56,6 +56,18 @@
   --dur-fast: 120ms;
   --dur-enter: 180ms;
   --dur-screen: 240ms;
+  /*
+   * EXCECAO deliberada a escala acima, so para o deslize do cursor de um
+   * espectador (3/T6 da SPEC). As posicoes chegam a cada 40 ms: uma transicao de
+   * 120 ms nunca terminaria antes da proxima e o atraso empilharia, e o `--ease`
+   * desacelera no fim de CADA trecho, o que vira solavanco a cada quadro em vez
+   * de deslize. Por isso a duracao fica ABAIXO do intervalo e o easing e linear.
+   * NAO repetir este token no bloco de `prefers-reduced-motion` abaixo: o
+   * `transition-duration: 0.001ms !important` do seletor universal ja zera a
+   * transicao, e duplicar daria a impressao errada de que a media query precisa
+   * ser tratada em JS.
+   */
+  --dur-cursor-glide: 32ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 }
 

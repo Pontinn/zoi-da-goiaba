@@ -19,6 +19,8 @@ export type MessageType =
   | 'LEAVE'
   | 'PING'
   | 'PONG'
+  | 'CURSOR_MOVE'
+  | 'CURSOR_END'
 
 export interface Envelope<T = unknown> {
   v: typeof PROTOCOL_VERSION
@@ -132,6 +134,15 @@ export interface TxStartPayload {
    * Chromium e o transmissor acabaria enviando VP8.
    */
   videoCodec?: string
+  /**
+   * Ponteiros dos espectadores LIGADOS nesta transmissao (RF-01/RF-02/RF-27).
+   * Campo OPCIONAL: ausente = cliente antigo, ou transmissao com a opcao
+   * desligada. O consumidor le a ausencia como `false`. Nunca e `true` quando
+   * `sourceKind === 'window'` (RF-04), mas o guard NAO cruza os dois campos: a
+   * regra vive em quem produz, e um payload inconsistente e inofensivo (o
+   * overlay de janela simplesmente nunca sobe).
+   */
+  pointers?: boolean
 }
 
 export interface TxStopPayload {
@@ -141,6 +152,19 @@ export interface TxStopPayload {
 
 export interface WatchingUpdatePayload {
   watchingTxId: string | null
+}
+
+export interface CursorMovePayload {
+  /** A transmissao a que esta posicao pertence (RF-16). */
+  txId: string
+  /** Fracao [0..1] da LARGURA do conteudo real compartilhado (sem letterbox). */
+  x: number
+  /** Fracao [0..1] da ALTURA do conteudo real compartilhado (sem letterbox). */
+  y: number
+}
+
+export interface CursorEndPayload {
+  txId: string
 }
 
 export interface QualityUpdatePayload {
@@ -190,6 +214,8 @@ export interface PayloadByType {
   LEAVE: LeavePayload
   PING: PingPayload
   PONG: PongPayload
+  CURSOR_MOVE: CursorMovePayload
+  CURSOR_END: CursorEndPayload
 }
 
 /** Mensagem ja validada, sem o envelope de transporte. */
@@ -267,7 +293,9 @@ export const MESSAGE_TYPES: readonly MessageType[] = [
   'OWNER_TRANSFER',
   'LEAVE',
   'PING',
-  'PONG'
+  'PONG',
+  'CURSOR_MOVE',
+  'CURSOR_END'
 ]
 
 export function isRosterMember(value: unknown): value is RosterMember {
@@ -357,7 +385,10 @@ export function isTxStartPayload(value: unknown): value is TxStartPayload {
     // Campo aditivo e ABERTO: um codec desconhecido nunca invalida a mensagem
     // inteira (cliente antigo nao manda nada, cliente futuro pode mandar outro
     // nome). Quem consome normaliza.
-    (value['videoCodec'] === undefined || isString(value['videoCodec']))
+    (value['videoCodec'] === undefined || isString(value['videoCodec'])) &&
+    // Aditivo e BOOLEANO simples: nada de enum aqui. Ausente vale `false` para
+    // quem consome, e um cliente antigo nunca manda o campo.
+    (value['pointers'] === undefined || isBoolean(value['pointers']))
   )
 }
 
@@ -372,6 +403,25 @@ export function isTxStopPayload(value: unknown): value is TxStopPayload {
 
 export function isWatchingUpdatePayload(value: unknown): value is WatchingUpdatePayload {
   return isRecord(value) && (value['watchingTxId'] === null || isString(value['watchingTxId']))
+}
+
+/**
+ * Guard ESTRUTURAL, como todos os deste arquivo: ele NAO checa a faixa [0..1].
+ * A checagem de faixa e semantica e vive no CursorHub, porque um valor fora da
+ * faixa deve ser descartado em silencio, sem invalidar a conexao nem gerar log.
+ */
+export function isCursorMovePayload(value: unknown): value is CursorMovePayload {
+  return (
+    isRecord(value) &&
+    isString(value['txId']) &&
+    value['txId'].length > 0 &&
+    isFiniteNumber(value['x']) &&
+    isFiniteNumber(value['y'])
+  )
+}
+
+export function isCursorEndPayload(value: unknown): value is CursorEndPayload {
+  return isRecord(value) && isString(value['txId']) && value['txId'].length > 0
 }
 
 export function isQualityUpdatePayload(value: unknown): value is QualityUpdatePayload {
@@ -422,7 +472,9 @@ const PAYLOAD_GUARDS: { [K in MessageType]: (value: unknown) => value is Payload
   OWNER_TRANSFER: isOwnerTransferPayload,
   LEAVE: isLeavePayload,
   PING: isPingPayload,
-  PONG: isPingPayload
+  PONG: isPingPayload,
+  CURSOR_MOVE: isCursorMovePayload,
+  CURSOR_END: isCursorEndPayload
 }
 
 /** Verifica apenas a casca do envelope, sem olhar o payload. */

@@ -1,0 +1,32 @@
+/*
+ * Folha da SEGUNDA janela de renderer (o overlay de ponteiros do transmissor).
+ *
+ * REGRA DE SEGURANCA DESTE ARQUIVO: esta janela cobre um MONITOR INTEIRO da
+ * pessoa, fica sempre no topo, deixa o clique passar e e invisivel para a
+ * captura de tela. Se a pagina pintar QUALQUER fundo opaco, a tela real fica
+ * apagada e a pessoa nao consegue nem clicar no que esta por baixo nem
+ * fotografar para mostrar o problema.
+ *
+ * `theme.css` e importado antes desta folha (os tokens de cor, espaco e
+ * movimento vem de la) e pinta `body { background: var(--bg-app) }`, que e
+ * opaco. Por isso a limpeza abaixo e obrigatoria e leva `!important`: uma
+ * mudanca futura na ordem dos imports nao pode reintroduzir a tela apagada.
+ */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.z-overlay {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  /* Segunda rede do clique passando: o main ja fez `setIgnoreMouseEvents`. */
+  pointer-events: none;
+}
