@@ -20,7 +20,7 @@ import {
   ICE_ATTACH_RETRY_INTERVAL_MS,
   MEDIA_STALL_TIMEOUT_MS
 } from '@shared/config'
-import type { ZoiApi } from '@shared/ipc'
+import type { AudioExclusionUnavailableReason, ZoiApi } from '@shared/ipc'
 import { PRESETS } from '@shared/presets'
 import type { PresetId, SourceKind, TxStopReason } from '@shared/protocol'
 import {
@@ -466,9 +466,14 @@ export class MediaManager implements MediaHooks {
     // A exclusao e armada ANTES da captura de video: com ela ativa o audio nao
     // vem mais do getDisplayMedia, e sim da nossa track gerada.
     let exclusion: AudioExclusionSession | null = null
+    /** Alimentam a linha de estado de captura escrita mais abaixo (RF-04/RF-08). */
+    let exclusionReason: AudioExclusionUnavailableReason | null = null
+    let captureId: string | null = null
     if (options.withAudio) {
       const outcome = await this.audioExclusion.start()
       exclusion = outcome.session
+      exclusionReason = outcome.reason
+      captureId = outcome.captureId
       if (!exclusion) {
         console.warn(
           `[media] captura por aplicativo indisponivel (${outcome.reason ?? 'sem motivo'})`
@@ -540,6 +545,22 @@ export class MediaManager implements MediaHooks {
     }
     this.local = transmission
     console.info(`[codec] transmissao ${transmission.txId} vai sair em ${transmission.videoCodec}`)
+
+    // Estado de captura de audio, UMA linha por transmissao (RF-04). As tres
+    // formas sao distintas de proposito: e por elas que o log do dia responde
+    // qual dos tres caminhos estava valendo, sem depender de um booleano. Esta
+    // e tambem a PONTE entre o `txId` do renderer e o `captureId` do main.
+    if (transmission.audioMode === 'excluded') {
+      console.info(
+        `[audio] transmissao ${transmission.txId} captura=process-exclusion sessao=${captureId ?? 'sem-sessao'}`
+      )
+    } else if (transmission.audioMode === 'full-loopback') {
+      console.info(
+        `[audio] transmissao ${transmission.txId} captura=full-loopback motivo=${exclusionReason ?? 'sem-motivo'}`
+      )
+    } else {
+      console.info(`[audio] transmissao ${transmission.txId} captura=none`)
+    }
 
     // Anuncia primeiro para que o TX_START chegue antes ou junto do `call`.
     this.session.announceTransmissionStart({

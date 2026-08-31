@@ -222,6 +222,14 @@ export const POINTER_LOG_INTERVAL_MS = 10_000
  * motor nativo carrega a propria copia deste numero em `kFadeMs` (mixer.cc):
  * C++ nao importa TypeScript, e gerar um cabecalho para UM numero seria
  * maquinaria maior que o problema.
+ *
+ * `AUDIO_MAX_SKIP_MS`: teto de quanto o relogio da track pode avancar de uma vez
+ * para cobrir frames descartados. Sem teto, uma rajada de mil descartes daria um
+ * salto unico de 10 segundos, muito alem do jitter que a track ja sofre. Acima
+ * do teto o relogio avanca 200 ms e o resto do buraco e absorvido (a linha do
+ * tempo comprime, como antes desta feature); a magnitude REAL nunca se perde,
+ * porque a linha `[audio-drop]` carrega a contagem verdadeira de descartes.
  */
 export const AUDIO_LOG_WINDOW_MS = 10_000
 export const AUDIO_FADE_MS = 1
+export const AUDIO_MAX_SKIP_MS = 200

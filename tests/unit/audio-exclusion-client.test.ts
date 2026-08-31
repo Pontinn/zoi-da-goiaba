@@ -313,8 +313,10 @@ describe('audio-exclusion client', () => {
     desiredSize = 4
     port.deliverPcm(20_000)
 
-    // O frame descartado tambem nao pode avancar o relogio da track.
-    expect(written.map((frame) => frame.timestamp)).toEqual([0, 10_000])
+    // O frame descartado nao e escrito, mas o relogio ANDA sobre o buraco: a
+    // terceira entrega sai rotulada 20 000 us (e nao 10 000), porque colar os
+    // dois pedacos emendaria formas de onda nao contiguas no tempo real.
+    expect(written.map((frame) => frame.timestamp)).toEqual([0, 20_000])
   })
 
   it('so chama o start do main uma vez por sessao', async () => {
