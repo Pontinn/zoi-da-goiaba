@@ -17,6 +17,19 @@ float Clamp(float value) {
   return value;
 }
 
+/**
+ * Duracao da rampa de entrada e de saida do silencio, por fonte.
+ *
+ * DUPLICACAO CONSCIENTE de `AUDIO_FADE_MS` em `src/shared/config.ts`: C++ nao
+ * importa TypeScript e gerar um cabecalho para UM numero seria maquinaria maior
+ * que o problema. Mudou aqui, muda la.
+ *
+ * 1 ms e um decimo do frame de 10 ms (nunca soa como corte de volume) e uma
+ * ordem de grandeza acima do periodo de amostragem, o que espalha o transiente
+ * por 48 amostras em vez de concentra-lo em uma.
+ */
+constexpr uint32_t kFadeMs = 1;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -86,6 +99,9 @@ bool Mixer::Start(const AudioFormat& format, uint32_t frameMs, PcmSink sink) {
   frameMs_ = frameMs == 0 ? 10 : frameMs;
   framesPerTick_ = static_cast<size_t>(format_.sampleRate) * frameMs_ / 1000;
   if (framesPerTick_ == 0) return false;
+  fadeFrames_ = static_cast<size_t>(format_.sampleRate) * kFadeMs / 1000;
+  if (fadeFrames_ < 2) fadeFrames_ = 2;
+  if (fadeFrames_ > framesPerTick_) fadeFrames_ = framesPerTick_;
   sink_ = std::move(sink);
 
   stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -132,6 +148,8 @@ void Mixer::Stop() {
   {
     std::lock_guard<std::mutex> guard(sourcesMutex_);
     sources_.clear();
+    sourceSilenced_.clear();
+    lastFrame_.clear();
   }
   sink_ = nullptr;
 }
@@ -139,6 +157,24 @@ void Mixer::Stop() {
 void Mixer::SetSources(std::vector<AudioRingBuffer*> sources) {
   std::lock_guard<std::mutex> guard(sourcesMutex_);
   sources_ = std::move(sources);
+  // Os dois auxiliares nascem ZERADOS junto com a composicao nova: toda fonte
+  // recem-publicada entra marcada como vinda do silencio, entao a PRIMEIRA
+  // entrega dela sobe com rampa. E o que se quer: uma captura recem-aberta
+  // entrando no mix e exatamente uma transicao silencio -> sinal.
+  sourceSilenced_.assign(sources_.size(), 1);
+  lastFrame_.assign(sources_.size() * format_.channels, 0.0f);
+}
+
+MixerHealth Mixer::TakeHealth() {
+  MixerHealth health;
+  health.underrunTicks = underrunTicks_.exchange(0);
+  health.underrunFrames = underrunFrames_.exchange(0);
+  health.silentTicks = silentTicks_.exchange(0);
+  return health;
+}
+
+bool Mixer::HasUnderrun() const {
+  return underrunTicks_.load() > 0;
 }
 
 void Mixer::Run() {
@@ -153,18 +189,99 @@ void Mixer::Run() {
     if (result != WAIT_OBJECT_0 + 1) break;  // stop ou falha de espera
 
     std::fill(mixed.begin(), mixed.end(), 0.0f);
+    bool tickHadUnderrun = false;
+    bool tickHadAudio = false;
     {
       std::lock_guard<std::mutex> guard(sourcesMutex_);
-      for (AudioRingBuffer* source : sources_) {
+      const size_t channels = format_.channels;
+      for (size_t index = 0; index < sources_.size(); ++index) {
         std::fill(scratch.begin(), scratch.end(), 0.0f);
-        const size_t frames = source->Read(scratch.data(), framesPerTick_);
-        if (frames == 0) continue;
-        const size_t samples = frames * format_.channels;
-        for (size_t index = 0; index < samples; ++index) {
-          mixed[index] += scratch[index];
+        const size_t frames = sources_[index]->Read(scratch.data(), framesPerTick_);
+
+        // Quantas amostras deste `scratch` entram na soma. Com a cauda de
+        // decaimento o pedaco somado NAO e `frames * channels`.
+        size_t samples = frames * channels;
+
+        if (frames == 0) {
+          // Fonte muda. Se ela estava tocando no tique anterior, o anel drenou
+          // exatamente na fronteira do tique: sem a cauda, o resultado seria
+          // amplitude total seguida de silencio absoluto, a mesma classe de
+          // clique que esta rampa existe para corrigir. A cauda nao inventa
+          // audio: e uma reta de 1 ms que sai do ultimo valor REAL e chega a
+          // zero, o que o fade-out teria produzido se o codigo soubesse, no
+          // tique anterior, que aquele era o ultimo.
+          if (sourceSilenced_[index] == 0 && fadeFrames_ >= 2) {
+            const float divisor = static_cast<float>(fadeFrames_ - 1);
+            for (size_t i = 0; i < fadeFrames_; ++i) {
+              const float gain = static_cast<float>(fadeFrames_ - 1 - i) / divisor;
+              for (size_t c = 0; c < channels; ++c) {
+                // ATRIBUICAO, nao multiplicacao: `scratch` acabou de ser zerado
+                // e nao ha quadro lido neste tique.
+                scratch[i * channels + c] = lastFrame_[index * channels + c] * gain;
+              }
+            }
+            samples = fadeFrames_ * channels;
+          }
+          sourceSilenced_[index] = 1;
+          // Zero quadros NUNCA conta como underrun: e o estado normal de um
+          // aplicativo que nao esta tocando nada, e conta-lo faria o relatorio
+          // de saude disparar para sempre em toda maquina saudavel.
+          if (samples == 0) continue;
+        } else {
+          tickHadAudio = true;
+          const size_t fade = std::min(frames, fadeFrames_);
+
+          // O ultimo quadro lido e guardado ANTES de qualquer rampa: guardar
+          // depois salvaria um valor ja atenuado.
+          for (size_t c = 0; c < channels; ++c) {
+            lastFrame_[index * channels + c] = scratch[(frames - 1) * channels + c];
+          }
+
+          if (fade >= 2) {
+            const float divisor = static_cast<float>(fade - 1);
+            // (1) fade-in: a fonte estava silenciada e voltou.
+            if (sourceSilenced_[index] != 0) {
+              for (size_t i = 0; i < fade; ++i) {
+                const float gain = static_cast<float>(i) / divisor;
+                for (size_t c = 0; c < channels; ++c) {
+                  scratch[i * channels + c] *= gain;
+                }
+              }
+            }
+            // (2) fade-out DENTRO do frame: leitura parcial, a cauda de `mixed`
+            // vai ficar no zero do fill, entao o sinal precisa encostar nele.
+            if (frames < framesPerTick_) {
+              const size_t start = frames - fade;
+              for (size_t i = 0; i < fade; ++i) {
+                const float gain = static_cast<float>(fade - 1 - i) / divisor;
+                for (size_t c = 0; c < channels; ++c) {
+                  scratch[(start + i) * channels + c] *= gain;
+                }
+              }
+            }
+          }
+
+          if (frames < framesPerTick_) {
+            // Unico caso em que audio real foi perdido.
+            underrunFrames_.fetch_add(framesPerTick_ - frames);
+            tickHadUnderrun = true;
+            sourceSilenced_[index] = 1;
+          } else {
+            sourceSilenced_[index] = 0;
+          }
+        }
+
+        // A rampa vive em `scratch` e NUNCA em `mixed`: `mixed` e a soma de
+        // todas as fontes, e atenuar la faria um engasgo de uma fonte abaixar o
+        // volume de todas as outras.
+        for (size_t sample = 0; sample < samples; ++sample) {
+          mixed[sample] += scratch[sample];
         }
       }
     }
+
+    if (tickHadUnderrun) underrunTicks_.fetch_add(1);
+    if (!tickHadAudio) silentTicks_.fetch_add(1);
 
     for (size_t index = 0; index < sampleCount; ++index) {
       mixed[index] = Clamp(mixed[index]);
