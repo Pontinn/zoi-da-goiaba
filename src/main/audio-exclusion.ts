@@ -23,6 +23,8 @@ import {
   type AudioExclusionStatus,
   type AudioExclusionUnavailableReason
 } from '@shared/ipc'
+import { AUDIO_LOG_WINDOW_MS } from '@shared/config'
+import { createThrottledCounter, type ThrottledCounter } from '@shared/log-throttle'
 // O pacote nativo NUNCA lanca no import: sem o binario ele exporta um stub que
 // responde `probe()` com o motivo, e o app segue no caminho degradado.
 import { probe as probeNativeAddon } from 'zoi-audio-capture'
@@ -50,6 +52,17 @@ interface ExclusionSession {
   restarts: number
   /** Parada voluntaria: `exit` depois disso nao dispara a cascata. */
   disposing: boolean
+  /**
+   * Contadores com janela dos dois relatorios de diagnostico que podem repetir.
+   * Um app que abre e fecha sessao de audio varias vezes por segundo faria o
+   * motor emitir `active`/`skipped` na mesma cadencia; sem janela, isso encheria
+   * o arquivo do dia. A linha que sai carrega o estado MAIS RECENTE e quantas
+   * mudancas foram suprimidas.
+   */
+  activeLog: ThrottledCounter
+  skippedLog: ThrottledCounter
+  lastActiveDetail: string
+  lastSkippedDetail: string
 }
 
 let session: ExclusionSession | null = null
@@ -164,7 +177,17 @@ function spawnWorker(
     return null
   }
 
-  const created: ExclusionSession = { worker, mode, captureId, restarts, disposing: false }
+  const created: ExclusionSession = {
+    worker,
+    mode,
+    captureId,
+    restarts,
+    disposing: false,
+    activeLog: createThrottledCounter(AUDIO_LOG_WINDOW_MS),
+    skippedLog: createThrottledCounter(AUDIO_LOG_WINDOW_MS),
+    lastActiveDetail: '',
+    lastSkippedDetail: ''
+  }
 
   worker.on('message', (message: AudioWorkerEvent | undefined) => {
     if (!message || typeof message.type !== 'string') return
@@ -173,6 +196,52 @@ function spawnWorker(
     if (message.type === 'status') {
       if (message.state === 'failed') {
         escalate(created, message.detail || 'motor de captura falhou')
+        return
+      }
+
+      // Os quatro estados abaixo sao DIAGNOSTICO: nenhum deles pode disparar a
+      // cascata de degradacao, e um `state` desconhecido continua sendo
+      // descartado em silencio, como era o comportamento de hoje.
+      if (message.state === 'active') {
+        created.lastActiveDetail = message.detail
+        const summary = created.activeLog.record(Date.now())
+        if (summary) {
+          logToFile(
+            'info',
+            `[audio-native] ${created.captureId} active (${summary.count} mudancas em ${summary.sinceMs} ms): ${created.lastActiveDetail}`
+          )
+        }
+        return
+      }
+      if (message.state === 'skipped') {
+        created.lastSkippedDetail = message.detail
+        const summary = created.skippedLog.record(Date.now())
+        if (summary) {
+          logToFile(
+            'info',
+            `[audio-native] ${created.captureId} skipped (${summary.count} mudancas em ${summary.sinceMs} ms): ${created.lastSkippedDetail}`
+          )
+        }
+        return
+      }
+      if (message.state === 'health') {
+        // Sem throttle aqui: o proprio C++ ja limita a uma linha a cada 15 s.
+        logToFile('warn', `[audio-native] ${created.captureId} health: ${message.detail}`)
+        return
+      }
+      if (message.state === 'app-skipped') {
+        logToFile('warn', `[audio-native] ${created.captureId} app-skipped: ${message.detail}`)
+        // Um toast sem nome de aplicativo nao ajuda ninguem: sem detalhe, o
+        // evento fica so no log.
+        if (message.detail) {
+          sendStatus({
+            state: 'app-not-captured',
+            detail: message.detail,
+            captureId: created.captureId,
+            app: message.detail
+          })
+        }
+        return
       }
       return
     }
