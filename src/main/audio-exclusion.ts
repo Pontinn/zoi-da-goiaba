@@ -40,6 +40,12 @@ type CaptureMode = AudioWorkerConfig['mode']
 interface ExclusionSession {
   worker: UtilityProcess
   mode: CaptureMode
+  /**
+   * Identidade da SESSAO de captura (RF-08), nao do worker: a cascata re-forka o
+   * worker e o id continua o mesmo, que e o que liga o degrau A->B a mesma
+   * transmissao no arquivo de log.
+   */
+  captureId: string
   /** Quantas vezes a cascata ja re-forkou nesta sessao. */
   restarts: number
   /** Parada voluntaria: `exit` depois disso nao dispara a cascata. */
@@ -58,7 +64,9 @@ export function registerAudioExclusionWindow(getter: () => BrowserWindow | null)
 function sendStatus(status: AudioExclusionStatus): void {
   logToFile(
     'info',
-    `[audio-exclusion] estado ${status.state}${status.detail ? `: ${status.detail}` : ''}`
+    `[audio-exclusion] sessao ${status.captureId ?? 'sem-sessao'} estado ${status.state}${
+      status.detail ? `: ${status.detail}` : ''
+    }`
   )
   getWindow?.()?.webContents.send(IPC.audioExclusionStatus, status)
 }
@@ -139,7 +147,11 @@ function workerScriptPath(): string {
   )
 }
 
-function spawnWorker(mode: CaptureMode, restarts: number): ExclusionSession | null {
+function spawnWorker(
+  mode: CaptureMode,
+  restarts: number,
+  captureId: string
+): ExclusionSession | null {
   let worker: UtilityProcess
   try {
     worker = utilityProcess.fork(workerScriptPath(), [], {
@@ -152,7 +164,7 @@ function spawnWorker(mode: CaptureMode, restarts: number): ExclusionSession | nu
     return null
   }
 
-  const created: ExclusionSession = { worker, mode, restarts, disposing: false }
+  const created: ExclusionSession = { worker, mode, captureId, restarts, disposing: false }
 
   worker.on('message', (message: AudioWorkerEvent | undefined) => {
     if (!message || typeof message.type !== 'string') return
@@ -194,11 +206,11 @@ function escalate(previous: ExclusionSession, reason: string): void {
   previous.worker.kill()
   session = null
 
-  logToFile('warn', `[audio-exclusion] degradando: ${reason}`)
+  logToFile('warn', `[audio-exclusion] sessao ${previous.captureId} degradando: ${reason}`)
 
   // Degrau 1: uma retentativa no mesmo modo (falha transitoria do motor).
   if (previous.mode === 'process-exclusion' && previous.restarts === 0) {
-    const retry = spawnWorker('process-exclusion', 1)
+    const retry = spawnWorker('process-exclusion', 1, previous.captureId)
     if (retry) {
       session = retry
       return
@@ -207,15 +219,20 @@ function escalate(previous: ExclusionSession, reason: string): void {
 
   // Degrau 2: loopback classico do endpoint, sempre disponivel.
   if (previous.mode === 'process-exclusion') {
-    const fallback = spawnWorker('endpoint-loopback', previous.restarts + 1)
+    const fallback = spawnWorker('endpoint-loopback', previous.restarts + 1, previous.captureId)
     if (fallback) {
       session = fallback
-      sendStatus({ state: 'degraded-full-loopback', detail: reason })
+      sendStatus({
+        state: 'degraded-full-loopback',
+        detail: reason,
+        captureId: previous.captureId,
+        app: null
+      })
       return
     }
   }
 
-  sendStatus({ state: 'failed', detail: reason })
+  sendStatus({ state: 'failed', detail: reason, captureId: previous.captureId, app: null })
 }
 
 export async function startAudioExclusion(): Promise<AudioExclusionStartResult> {
@@ -237,14 +254,20 @@ export async function startAudioExclusion(): Promise<AudioExclusionStartResult> 
     return unavailable(isMissingBinary ? 'addon-load-failed' : 'activation-failed')
   }
 
-  const started = spawnWorker('process-exclusion', 0)
+  // Um id por SESSAO de exclusao, gerado ANTES do fork: a cascata re-forka o
+  // worker e leva o mesmo id adiante (2b.1 da SPEC).
+  const captureId = `ax-${Date.now().toString(36)}`
+
+  const started = spawnWorker('process-exclusion', 0, captureId)
   if (!started) return unavailable('worker-spawn-failed')
 
   session = started
+  logToFile('info', `[audio-exclusion] sessao ${captureId} iniciada em process-exclusion`)
   return {
     mode: 'process-exclusion',
     sampleRate: AUDIO_EXCLUSION_SAMPLE_RATE,
-    channels: AUDIO_EXCLUSION_CHANNELS
+    channels: AUDIO_EXCLUSION_CHANNELS,
+    captureId
   }
 }
 

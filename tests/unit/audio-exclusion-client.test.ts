@@ -102,7 +102,7 @@ class FakeAudioData {
 type MessageListener = (event: { data: unknown; ports: FakePort[] }) => void
 
 const listeners = new Set<MessageListener>()
-let startResult: unknown = { mode: 'process-exclusion', sampleRate: 48000, channels: 2 }
+let startResult: unknown = { mode: 'process-exclusion', sampleRate: 48000, channels: 2, captureId: 'ax-teste' }
 let startCalls = 0
 let stopCalls = 0
 /** Quando true, o main entrega o port ANTES do invoke resolver (caso real). */
@@ -155,7 +155,7 @@ describe('audio-exclusion client', () => {
     startCalls = 0
     stopCalls = 0
     deliverPortOnStart = true
-    startResult = { mode: 'process-exclusion', sampleRate: 48000, channels: 2 }
+    startResult = { mode: 'process-exclusion', sampleRate: 48000, channels: 2, captureId: 'ax-teste' }
     FakeGenerator.instances = []
     installGlobals()
   })

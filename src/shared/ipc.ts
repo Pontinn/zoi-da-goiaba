@@ -108,15 +108,29 @@ export type AudioExclusionUnavailableReason =
   | 'activation-failed'
 
 export type AudioExclusionStartResult =
-  | { mode: 'process-exclusion'; sampleRate: 48000; channels: 2 }
+  | { mode: 'process-exclusion'; sampleRate: 48000; channels: 2; captureId: string }
   | { mode: 'unavailable'; reason: AudioExclusionUnavailableReason }
 
-export type AudioExclusionState = 'active' | 'degraded-full-loopback' | 'failed'
+export type AudioExclusionState =
+  | 'active'
+  | 'degraded-full-loopback'
+  | 'failed'
+  /**
+   * Um aplicativo especifico foi visto pelo motor e NAO esta sendo capturado,
+   * por um motivo que o sistema consegue detectar (RF-19). Nunca e emitido para
+   * o motivo `arvore-proibida`, que e a exclusao PRETENDIDA (Discord e o proprio
+   * Zoi): avisar sobre ele seria alarmar o usuario com o produto funcionando.
+   */
+  | 'app-not-captured'
 
 export interface AudioExclusionStatus {
   state: AudioExclusionState
-  /** Texto tecnico curto para log; a UI usa so `state`. */
+  /** Texto tecnico curto para log; a UI usa `state` e `app`. */
   detail: string | null
+  /** Sessao de captura a que este status pertence (RF-08). Null antes de haver sessao. */
+  captureId: string | null
+  /** Basename do executavel; preenchido SO quando `state === 'app-not-captured'`. */
+  app: string | null
 }
 
 /** Canal do `window.postMessage` que leva o MessagePort ao mundo principal. */

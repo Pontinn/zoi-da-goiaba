@@ -203,3 +203,25 @@ export const CURSOR_IDLE_MS = 5_000
 export const CURSOR_RECEIVE_MIN_GAP_MS = 20
 export const POINTER_OVERLAY_FRAME_MS = 33
 export const POINTER_LOG_INTERVAL_MS = 10_000
+
+/**
+ * Diagnostico do caminho de audio (feature audio-quality).
+ *
+ * `AUDIO_LOG_WINDOW_MS`: janela minima, em milissegundos, entre duas linhas de
+ * log de um MESMO ponto instrumentado. 10 s foi escolhido pelo calculo de pior
+ * caso da SPEC: sete pontos disparando sem parar por 4 horas dao cerca de 8 200
+ * linhas (~1,15 MB), bem abaixo do teto de 5 MB por dia do file-logger, cujo
+ * estouro silenciaria o log do APP INTEIRO. Deliberadamente NAO reusa o
+ * `POINTER_LOG_INTERVAL_MS`: sao dominios diferentes, e amarrar os dois no mesmo
+ * numero faria mexer num quebrar o outro em silencio.
+ *
+ * `AUDIO_FADE_MS`: duracao, em milissegundos, da rampa de entrada e de saida do
+ * silencio no lado do renderer. 1 ms e um decimo do frame de 10 ms (nunca soa
+ * como corte de volume) e uma ordem de grandeza acima do periodo de amostragem,
+ * o que espalha o transiente por 48 amostras em vez de concentra-lo em uma. O
+ * motor nativo carrega a propria copia deste numero em `kFadeMs` (mixer.cc):
+ * C++ nao importa TypeScript, e gerar um cabecalho para UM numero seria
+ * maquinaria maior que o problema.
+ */
+export const AUDIO_LOG_WINDOW_MS = 10_000
+export const AUDIO_FADE_MS = 1

@@ -23,6 +23,12 @@ export interface AudioExclusionStartOutcome {
   session: AudioExclusionSession | null
   /** Preenchido quando `session` e null: por que a exclusao nao subiu. */
   reason: AudioExclusionUnavailableReason | null
+  /**
+   * Id da sessao de captura gerada pelo main (RF-08). E ele que liga as linhas
+   * `[audio-native]` do arquivo de log a uma transmissao. Null quando nao houve
+   * sessao nenhuma.
+   */
+  captureId: string | null
 }
 
 export interface AudioExclusionClient {
@@ -126,7 +132,7 @@ export function createAudioExclusionClient(): AudioExclusionClient {
       const result = await window.zoi.audioExclusion.start()
       if (result.mode === 'unavailable') {
         dispose()
-        return { session: null, reason: result.reason }
+        return { session: null, reason: result.reason, captureId: null }
       }
 
       const port = await Promise.race([
@@ -136,7 +142,7 @@ export function createAudioExclusionClient(): AudioExclusionClient {
       if (!port) {
         dispose()
         void window.zoi.audioExclusion.stop()
-        return { session: null, reason: 'activation-failed' }
+        return { session: null, reason: 'activation-failed', captureId: null }
       }
 
       generator = new MediaStreamTrackGenerator({ kind: 'audio' })
@@ -145,6 +151,7 @@ export function createAudioExclusionClient(): AudioExclusionClient {
       const track = generator
       return {
         reason: null,
+        captureId: result.captureId,
         session: {
           track,
           stop(): void {
