@@ -922,14 +922,19 @@ class FakeCaptureStream {
 }
 
 interface ExclusionStub {
-  client: { start: () => Promise<{ session: unknown; reason: string | null }> }
+  client: {
+    start: () => Promise<{ session: unknown; reason: string | null; captureId: string | null }>
+  }
   starts: number
   stops: number
   tracks: FakeMediaTrack[]
 }
 
 /** Stub do cliente de exclusao: devolve uma track propria ou recusa. */
-function exclusionStub(available: boolean): ExclusionStub {
+function exclusionStub(
+  available: boolean,
+  options: { reason?: string; captureId?: string } = {}
+): ExclusionStub {
   const stub: ExclusionStub = {
     starts: 0,
     stops: 0,
@@ -937,7 +942,13 @@ function exclusionStub(available: boolean): ExclusionStub {
     client: {
       start: async () => {
         stub.starts += 1
-        if (!available) return { session: null, reason: 'addon-load-failed' }
+        if (!available) {
+          return {
+            session: null,
+            reason: options.reason ?? 'addon-load-failed',
+            captureId: null
+          }
+        }
         const track = new FakeMediaTrack('audio')
         stub.tracks.push(track)
         return {
@@ -947,7 +958,8 @@ function exclusionStub(available: boolean): ExclusionStub {
               stub.stops += 1
             }
           },
-          reason: null
+          reason: null,
+          captureId: options.captureId ?? 'ax-teste'
         }
       }
     }
@@ -1183,6 +1195,92 @@ describe('media-manager / captura de audio com exclusao', () => {
     expect(pull.answeredWith).toBe(local.stream)
     expect((pull.answeredWith as FakeCaptureStream).getAudioTracks()).toEqual([stub.tracks[0]])
     manager.teardown()
+  })
+
+  // -------------------------------------------------------------------------
+  // Linha de estado de captura (feature audio-quality). Uma linha por
+  // transmissao, com TRES formas distintas. Ela e o que permite, olhando so o
+  // arquivo de log de uma sessao real, dizer sem ambiguidade qual dos tres
+  // caminhos de audio estava valendo: nenhum booleano responde isso.
+  // -------------------------------------------------------------------------
+
+  /** A unica linha `[audio]` escrita por uma transmissao. */
+  function audioLineOf(info: ReturnType<typeof vi.spyOn>): string {
+    const lines = (info.mock.calls as unknown[][])
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith('[audio] '))
+    expect(lines).toHaveLength(1)
+    return lines[0]!
+  }
+
+  it('sem audio: a linha de estado sai com captura=none', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const stub = exclusionStub(true)
+    const { manager } = managerWith(stub)
+
+    const local = await manager.startTransmission({ ...START_OPTIONS, withAudio: false })
+
+    expect(audioLineOf(info)).toBe(`[audio] transmissao ${local.txId} captura=none`)
+    manager.teardown()
+    info.mockRestore()
+  })
+
+  it('sistema inteiro: a linha carrega o MOTIVO de a exclusao nao ter subido', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const stub = exclusionStub(false, { reason: 'os-unsupported' })
+    const { manager } = managerWith(stub)
+
+    const local = await manager.startTransmission(START_OPTIONS)
+
+    expect(audioLineOf(info)).toBe(
+      `[audio] transmissao ${local.txId} captura=full-loopback motivo=os-unsupported`
+    )
+    manager.teardown()
+    info.mockRestore()
+  })
+
+  it('captura por aplicativo: a linha e a PONTE entre txId e captureId', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const stub = exclusionStub(true, { captureId: 'ax-teste' })
+    const { manager } = managerWith(stub)
+
+    const local = await manager.startTransmission(START_OPTIONS)
+
+    expect(audioLineOf(info)).toBe(
+      `[audio] transmissao ${local.txId} captura=process-exclusion sessao=ax-teste`
+    )
+    manager.teardown()
+    info.mockRestore()
+  })
+
+  it('as tres formas sao DISTINTAS entre si e nenhuma carrega marca de fallback', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    const none = managerWith(exclusionStub(true))
+    await none.manager.startTransmission({ ...START_OPTIONS, withAudio: false })
+    const noneLine = audioLineOf(info)
+    none.manager.teardown()
+    info.mockClear()
+
+    const loopback = managerWith(exclusionStub(false, { reason: 'os-unsupported' }))
+    await loopback.manager.startTransmission(START_OPTIONS)
+    const loopbackLine = audioLineOf(info)
+    loopback.manager.teardown()
+    info.mockClear()
+
+    const excluded = managerWith(exclusionStub(true, { captureId: 'ax-teste' }))
+    await excluded.manager.startTransmission(START_OPTIONS)
+    const excludedLine = audioLineOf(info)
+    excluded.manager.teardown()
+    info.mockRestore()
+
+    expect(new Set([noneLine, loopbackLine, excludedLine]).size).toBe(3)
+
+    // As quatro marcas que derrubam os specs e2e de fallback de direcao nao
+    // podem aparecer no ponto mais provavel de colisao.
+    for (const line of [noneLine, loopbackLine, excludedLine]) {
+      expect(line).not.toMatch(/media-pull|dialback|discando de volta|na outra direcao/i)
+    }
   })
 })
 
