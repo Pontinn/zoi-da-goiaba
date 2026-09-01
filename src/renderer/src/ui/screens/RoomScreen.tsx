@@ -10,7 +10,7 @@ import {
   TransmissionInProgressError
 } from '../../services/media-manager'
 import { session } from '../../services/session'
-import { useAppStore } from '../../store/app-store'
+import { TOAST_TTL_LONG_MS, useAppStore } from '../../store/app-store'
 import { refreshLocalTransmission, selectTransmission, useRoomStore } from '../../store/room-store'
 import { Button, IconButton } from '../components/Button'
 import { Modal } from '../components/Modal'
@@ -22,6 +22,7 @@ import { TransmissionStatusCard } from '../components/TransmissionStatusCard'
 import { TransmittingBar } from '../components/TransmittingBar'
 import { BroadcastIcon, CheckIcon, CopyIcon, GearIcon, LogoutIcon } from '../components/icons'
 import { copyText } from '../clipboard'
+import { AUDIO_CAPTURE_COPY } from './audio-copy'
 import { PlayerView } from './PlayerView'
 
 /** Corrida de render: um membro fora do mapa ainda desenha, com o slot 0. */
@@ -114,18 +115,21 @@ export function RoomScreen(): JSX.Element {
     if (!excludedTxId) return undefined
     const alreadyWarned = new Set<string>()
     return window.zoi.audioExclusion.onStatus((status) => {
+      // Sem nome de aplicativo nao ha aviso a dar, e a chave NAO pode ser
+      // consumida: quem faz o aviso funcionar e a reemissao seguinte, que vem
+      // com o nome preenchido (3/T10).
+      if (status.state === 'app-not-captured' && !status.app) return
       if (alreadyWarned.has(status.state)) return
       alreadyWarned.add(status.state)
       if (status.state === 'degraded-full-loopback') {
-        pushToast(
-          'warning',
-          'A captura de audio por aplicativo falhou; a transmissao segue com o som do sistema inteiro.'
-        )
+        pushToast('warning', AUDIO_CAPTURE_COPY.degradedRuntime)
       } else if (status.state === 'failed') {
-        pushToast(
-          'warning',
-          'O audio da transmissao caiu; pare e transmita de novo para restaurar o som.'
-        )
+        pushToast('warning', AUDIO_CAPTURE_COPY.failedRuntime)
+      } else if (status.state === 'app-not-captured' && status.app) {
+        // O `&& status.app` nao muda comportamento (o descarte acima ja
+        // devolveu quando o nome vem vazio): ele so ESTREITA o tipo de
+        // `string | null` para `string` neste ramo.
+        pushToast('warning', AUDIO_CAPTURE_COPY.appNotCaptured(status.app))
       }
     })
   }, [excludedTxId, pushToast])
@@ -204,15 +208,12 @@ export function RoomScreen(): JSX.Element {
       // O switch da barra ja nasce coerente com o do modal (caminho da F1.1).
       setPointersOfTx({ txId: transmission.txId, on: transmission.pointers })
       if (choice.withAudio && !transmission.hasAudio) {
-        pushToast(
-          'warning',
-          'Nao foi possivel capturar o audio do sistema; a transmissao segue so com video.'
-        )
+        pushToast('warning', AUDIO_CAPTURE_COPY.noAudio)
       } else if (transmission.audioMode === 'full-loopback') {
-        pushToast(
-          'warning',
-          'Nao foi possivel isolar o audio do Discord; a transmissao segue com o som do sistema inteiro.'
-        )
+        // Vazar a propria conversa para a sala inteira e mais grave que "a
+        // fonte nao pode ser capturada": tom `danger` e tempo de LER as duas
+        // frases, nao so de notar o aviso (RF-15).
+        pushToast('danger', AUDIO_CAPTURE_COPY.fullLoopbackStart, TOAST_TTL_LONG_MS)
       }
       // O `startTransmission` ja resolveu o `setPointersMode`, entao este valor
       // e final: pediu ponteiros e nao veio = o overlay nao subiu (B3.2).
