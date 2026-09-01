@@ -170,3 +170,30 @@ O `electron.vite.config.ts` declara os dois entries de renderer (`index` e
   por hash do `peerId`, com colisao entre presentes resolvida pelo roster. A cor
   nunca viaja pela rede, cada cliente deriva a mesma sozinho, e ela aparece tanto
   no ponteiro quanto no avatar da lista de participantes.
+
+## Diagnostico de audio nos logs (feature audio-quality)
+
+O caminho de audio ganhou instrumentacao propria no log de arquivo (a mesma
+pasta citada no botao de logs das configuracoes, `userData/logs`). Cinco
+prefixos novos, cada um com uma origem fixa:
+
+| Prefixo | Arquivo | O que significa |
+|---|---|---|
+| `[audio]` | `services/media-manager.ts` | Uma linha por transmissao ligando o `txId` ao estado de captura: `captura=process-exclusion sessao=...` (estado A), `captura=full-loopback motivo=...` (estado C, inclui degradacao em runtime) ou `captura=none` |
+| `[audio-exclusion]` | `main/audio-exclusion.ts` | Ciclo de vida da sessao de captura por exclusao: sessao iniciada, degradando (com o motivo), indisponivel, ou falha do worker nativo |
+| `[audio-native]` | `main/audio-exclusion.ts` | Relatorios do motor nativo (C++): composicao `active` (processos efetivamente capturados), `skipped` (processos vistos e recusados, com o motivo: arvore proibida, subarvore proibida, falha de ativacao), `health` (underrun/fila cheia do lado nativo) e `app-skipped` (recusa avisavel ao transmissor) |
+| `[audio-drop]` | `services/audio-exclusion.ts` (renderer) | Backpressure no `WritableStream` do renderer: quadro PCM descartado porque o consumidor nao drenou a tempo |
+| `[audio-stats]` | `services/stats-monitor.ts` | Delta dos campos de audio do `inbound-rtp` do WebRTC (concealment, amostras descartadas/perdidas, jitter), separados por `kind` dos campos de video no mesmo coletor |
+
+Todo ponto que pode logar por frame ou em alta frequencia (`[audio-native]
+active/skipped`, o descarte de `[audio-drop]`) passa por um contador com
+janela (`shared/log-throttle.ts`, modulo puro sem Electron): conta sempre,
+escreve no maximo uma linha a cada `AUDIO_LOG_WINDOW_MS` (10 s, `shared/config.ts`),
+e essa linha carrega o total acumulado desde a anterior, nunca uma amostra que
+perderia a magnitude do problema (mil descartes em 10 s viram uma linha so,
+com o total 1000).
+
+Isso existe por causa do teto do proprio log de arquivo (`main/file-logger.ts`,
+`MAX_FILE_BYTES`, 5 MB por dia): ao estourar, o app inteiro para de gravar log
+pelo resto do dia, nao so a parte de audio, entao nenhum ponto novo de
+instrumentacao pode gerar volume sem controle.

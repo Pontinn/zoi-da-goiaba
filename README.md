@@ -83,7 +83,10 @@ Prioridades de projeto, nesta ordem:
 
 - Salas com código, aleatório ou personalizado, e limite configurável de 2 a 8 pessoas
 - Várias transmissões simultâneas, com escolha individual de qual assistir
-- Áudio do sistema opcional junto com a tela
+- Áudio do sistema opcional junto com a tela, sem os estalos identificados em sessões anteriores
+- Captura de áudio por aplicativo alcança qualquer dispositivo de saída ativo da máquina, não só o padrão
+- Aviso claro quando a captura de áudio cai para o modo sistema inteiro, deixando explícito que o som de outros aplicativos (como o Discord) vai junto
+- Diagnóstico de áudio registrado no log, para investigar problemas de som depois do fato
 - Ponteiros dos espectadores sobre a tela real de quem transmite, com o nome de cada um
 - Cor própria por pessoa, usada no ponteiro e no avatar da lista de participantes
 - Presets de qualidade 720p30, 1080p30 e 1080p60, com adaptação automática
@@ -97,6 +100,20 @@ Prioridades de projeto, nesta ordem:
 - Reconexão automática, com janela de tolerância de 15 segundos
 - Sons de notificação próprios, gravados na boca pelo próprio criador, e saudações variadas na abertura
 - Atualização automática via GitHub Releases
+
+## Histórico de versões
+
+| Versão | O que trouxe |
+|---|---|
+| v0.1.x | MVP: compartilhamento de tela P2P, salas com código, moderação e reconexão automática |
+| v0.2.0 | Captura de áudio do sistema por aplicativo, com exclusão automática do Discord |
+| v0.2.1 | Aviso na tela quando a transmissão ainda não tem quadro |
+| v0.3.0 | Escada de codecs de vídeo (AV1/VP9/H264/VP8), modo nitidez e modo compatibilidade |
+| v0.4.0 | Ponteiros dos espectadores sobre a tela real de quem transmite |
+| v0.5.0 | Qualidade de áudio (correção de estalos, captura por aplicativo em todos os dispositivos de saída, avisos mais claros) e diagnóstico de áudio nos logs |
+
+A versão instalada aparece nas configurações do app. Detalhes de cada release em
+[Releases](https://github.com/Pontinn/zoi-da-goiaba/releases).
 
 ## Instalação
 
