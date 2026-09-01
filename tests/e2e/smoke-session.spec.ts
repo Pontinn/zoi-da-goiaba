@@ -73,6 +73,22 @@ test.describe('smoke de sessao (2 instancias)', () => {
     await startTransmission(owner, { presetId: 'p720_30', withAudio: false })
     await expect(owner.page.getByTestId('transmitting-bar')).toContainText('720p30')
 
+    // 6b. Estado de captura de audio no log (RF-04/AC-03): uma linha por
+    //     transmissao, distinguindo os tres caminhos possiveis. O unico
+    //     deterministico aqui e o `none` (a suite transmite sem audio e o
+    //     helper desliga a exclusao por processo); os outros dois dependeriam
+    //     da placa de som de quem roda e ficam no checklist manual.
+    const broadcaster = owner
+    await expect
+      .poll(
+        () =>
+          broadcaster.consoleLines.filter((line) =>
+            /\[audio\] transmissao [0-9a-f-]{36} captura=none/.test(line)
+          ).length,
+        { timeout: TIMEOUTS.media }
+      )
+      .toBeGreaterThan(0)
+
     // 7. O espectador recebe a transmissao e o card do dono fica "ao vivo".
     const guestThumb = guest.page.getByTestId('stream-thumb')
     await expect(guestThumb).toHaveCount(1, { timeout: TIMEOUTS.media })
