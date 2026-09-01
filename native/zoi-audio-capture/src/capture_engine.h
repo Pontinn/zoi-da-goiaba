@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "mixer.h"
@@ -97,14 +98,31 @@ class Engine {
              std::string* error);
   void Stop();
 
+  /** Contador de frames PCM descartados pela fila cheia da TSFN. */
+  void SetPcmDropCounter(std::shared_ptr<std::atomic<uint64_t>> counter);
+
  private:
   void RunControlThread();
   void Reconcile(ProcessSnapshot* snapshot);
   void ReconcileEndpoint();
   void PublishSources();
   void Report(const std::string& state, const std::string& detail);
+  /**
+   * Emite um estado de DIAGNOSTICO. Diferente de `Report`, nao passa pela
+   * logica de `lastState_`: estes estados nunca podem ser suprimidos por
+   * igualdade nem podem corromper o `lastState_` do ciclo de vida.
+   */
+  void ReportRaw(const std::string& state, const std::string& detail);
+  /** Relatorio periodico de underrun e de descarte de fila. */
+  void ReportHealth();
   /** Texto curto de diagnostico com as ancoras abertas (vai no `detail`). */
   std::string DescribeAnchors(const ProcessSnapshot& snapshot) const;
+  /**
+   * Texto das sessoes VISTAS e nao capturadas. `seenCount` e a quantidade de
+   * sessoes ENUMERADAS na volta corrente (vem de `sessionPids.size()`), e nao a
+   * quantidade de recusas: sao numeros diferentes.
+   */
+  std::string DescribeSkipped(const ProcessSnapshot& snapshot, size_t seenCount) const;
 
   EngineOptions options_;
   StatusSink statusSink_;
@@ -120,6 +138,27 @@ class Engine {
   HANDLE wakeEvent_ = nullptr;
   std::atomic<bool> running_{false};
   std::string lastState_;
+
+  std::shared_ptr<std::atomic<uint64_t>> pcmDropCounter_;
+  /** `GetTickCount64()` no inicio de `RunControlThread`. */
+  ULONGLONG engineStartedAt_ = 0;
+  ULONGLONG lastHealthAt_ = 0;
+  std::string lastSkippedSignature_;
+  /**
+   * Chave (pid, motivo) -> tique da ULTIMA emissao de `app-skipped` daquela
+   * chave. Enquanto a recusa persistir e o motor tiver menos de
+   * `kAppSkippedReplayWindowMs` de vida, a emissao se REPETE: o assinante do
+   * renderer so nasce depois que a transmissao resolve, e a primeira emissao
+   * quase sempre cai no vazio.
+   */
+  std::unordered_map<uint64_t, ULONGLONG> warnedApps_;
+  /** pid, motivo e HRESULT (0 quando nao se aplica) da volta corrente. */
+  struct SkipEntry {
+    DWORD pid;
+    int reason;
+    HRESULT hr;
+  };
+  std::vector<SkipEntry> skipped_;
 };
 
 }  // namespace zoi

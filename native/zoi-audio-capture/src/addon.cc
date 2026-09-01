@@ -17,6 +17,8 @@
 #include <mmdeviceapi.h>
 #include <wrl/implements.h>
 
+#include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -292,8 +294,13 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
   Napi::ThreadSafeFunction pcmCallback = session->pcmCallback;
   Napi::ThreadSafeFunction statusCallback = session->statusCallback;
 
-  auto pcmSink = [pcmCallback](const float* samples, size_t sampleCount,
-                               int64_t timestampUs) mutable {
+  // Contador de frames perdidos pela fila cheia da TSFN. O motor le e zera nos
+  // relatorios de saude: o descarte continua sendo silencioso para o audio, mas
+  // deixa de ser silencioso para o diagnostico.
+  auto pcmDrops = std::make_shared<std::atomic<uint64_t>>(0);
+
+  auto pcmSink = [pcmCallback, pcmDrops](const float* samples, size_t sampleCount,
+                                         int64_t timestampUs) mutable {
     auto* frame = new PcmFrame();
     frame->samples.assign(samples, samples + sampleCount);
     frame->timestampUs = timestampUs;
@@ -307,8 +314,12 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
                                                      static_cast<double>(payload->timestampUs))});
           delete payload;
         });
-    // Fila cheia: descartar o frame e melhor do que acumular atraso de audio.
-    if (status != napi_ok) delete frame;
+    // Fila cheia: descartar o frame continua sendo melhor do que acumular
+    // atraso de audio, e agora o descarte e CONTADO.
+    if (status != napi_ok) {
+      pcmDrops->fetch_add(1);
+      delete frame;
+    }
   };
 
   auto statusSink = [statusCallback](const std::string& state,
@@ -322,6 +333,8 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
         });
     if (status != napi_ok) delete message;
   };
+
+  session->engine.SetPcmDropCounter(pcmDrops);
 
   if (!session->engine.Start(options, pcmSink, statusSink, &error)) {
     session->pcmCallback.Release();
