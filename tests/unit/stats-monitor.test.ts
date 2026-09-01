@@ -9,6 +9,7 @@ import { QUALITY_UPDATE_INTERVAL_MS } from '@shared/config'
 import {
   StatsMonitor,
   classify,
+  type InboundAudioStats,
   type InboundVideoStats,
   type OutboundVideoStats,
   type QualityReport
@@ -446,5 +447,327 @@ describe('stats-monitor / conexoes de saida', () => {
     // Parado o monitor, mais nenhuma leitura acontece.
     await tick(2)
     expect(outbound.calls).toBe(4)
+  })
+
+  // -------------------------------------------------------------------------
+  // Campos de audio (feature audio-quality). O que estes casos protegem:
+  //   1. os acumuladores param de MISTURAR video e audio, mas o relatorio de
+  //      qualidade continua agregado, por SOMA explicita: trocar o insumo por
+  //      "so video" mudaria a classificacao de todo mundo, que e regressao de
+  //      produto disfarcada de refatoracao;
+  //   2. o log de audio so existe no dia ruim: com tudo bem, nenhuma linha.
+  // -------------------------------------------------------------------------
+
+  it('separa video de audio e entrega o irmao de audio no mesmo tick', async () => {
+    const connection = new FakeConnection([
+      {
+        type: 'inbound-rtp',
+        kind: 'video',
+        bytesReceived: 1_000,
+        packetsLost: 2,
+        packetsReceived: 100,
+        framesDecoded: 12,
+        framesReceived: 14
+      },
+      {
+        type: 'inbound-rtp',
+        kind: 'audio',
+        bytesReceived: 200,
+        packetsLost: 1,
+        packetsReceived: 50,
+        jitter: 0.021,
+        audioLevel: 0.4,
+        concealedSamples: 1_440,
+        concealmentEvents: 3,
+        insertedSamplesForDeceleration: 7,
+        removedSamplesForAcceleration: 5,
+        packetsDiscarded: 2
+      }
+    ])
+
+    let audioSeen: ReadonlyMap<string, InboundAudioStats> | null = null
+    let videoSeen: ReadonlyMap<string, InboundVideoStats> | null = null
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 40,
+      onReport: () => {},
+      onInboundVideoStats: (stats) => {
+        videoSeen = stats
+      },
+      onInboundAudioStats: (stats) => {
+        audioSeen = stats
+      }
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    const audio = (audioSeen as unknown as ReadonlyMap<string, InboundAudioStats>).get('tx1')
+    expect(audio?.bytesReceived).toBe(200)
+    expect(audio?.packetsReceived).toBe(50)
+    expect(audio?.packetsLost).toBe(1)
+    expect(audio?.jitter).toBe(0.021)
+    expect(audio?.audioLevel).toBe(0.4)
+    expect(audio?.concealedSamples).toBe(1_440)
+    expect(audio?.concealmentEvents).toBe(3)
+    expect(audio?.insertedSamplesForDeceleration).toBe(7)
+    expect(audio?.removedSamplesForAcceleration).toBe(5)
+    expect(audio?.packetsDiscarded).toBe(2)
+
+    // O irmao de video continua recebendo SO o video.
+    const video = (videoSeen as unknown as ReadonlyMap<string, InboundVideoStats>).get('tx1')
+    expect(video?.framesDecoded).toBe(12)
+    expect(video?.framesReceived).toBe(14)
+  })
+
+  it('campos de audio ausentes viram null (jitter, nivel) ou zero (contadores)', async () => {
+    const connection = new FakeConnection([
+      { type: 'inbound-rtp', kind: 'audio', bytesReceived: 100, packetsReceived: 10 }
+    ])
+    let seen: ReadonlyMap<string, InboundAudioStats> | null = null
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 10,
+      onReport: () => {},
+      onInboundAudioStats: (stats) => {
+        seen = stats
+      }
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    const audio = (seen as unknown as ReadonlyMap<string, InboundAudioStats>).get('tx1')
+    // Zero e um valor legitimo de jitter e de nivel: mentir sobre ele
+    // estragaria o diagnostico, entao ausente e null.
+    expect(audio?.jitter).toBeNull()
+    expect(audio?.audioLevel).toBeNull()
+    expect(audio?.concealedSamples).toBe(0)
+    expect(audio?.concealmentEvents).toBe(0)
+    expect(audio?.packetsDiscarded).toBe(0)
+    expect(audio?.codec).toBeNull()
+  })
+
+  it('o agregado de qualidade usa a SOMA dos dois kind, nao so o video', async () => {
+    const connection = new FakeConnection([
+      { type: 'inbound-rtp', kind: 'video', bytesReceived: 0, packetsLost: 0, packetsReceived: 0 },
+      { type: 'inbound-rtp', kind: 'audio', bytesReceived: 0, packetsLost: 0, packetsReceived: 0 }
+    ])
+    const reports: QualityReport[] = []
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 40,
+      onReport: (report) => reports.push(report)
+    })
+
+    monitor.start()
+    await tick()
+    // Video impecavel, audio perdendo muito: so a SOMA classifica como 'bad'.
+    connection.setReports([
+      {
+        type: 'inbound-rtp',
+        kind: 'video',
+        bytesReceived: 1_000,
+        packetsLost: 0,
+        packetsReceived: 100
+      },
+      {
+        type: 'inbound-rtp',
+        kind: 'audio',
+        bytesReceived: 5_000,
+        packetsLost: 20,
+        packetsReceived: 10
+      }
+    ])
+    await tick()
+    monitor.stop()
+
+    expect(reports[1]!.level).toBe('bad')
+    // E o bitrate soma os bytes dos dois, como antes desta separacao.
+    expect(reports[1]!.inboundBitrateKbps).toBe(Math.round((6_000 * 8) / QUALITY_UPDATE_INTERVAL_MS))
+  })
+
+  it('inbound-rtp SEM kind continua somando no conjunto de video', async () => {
+    const connection = new FakeConnection([
+      { type: 'inbound-rtp', bytesReceived: 0, packetsLost: 0, packetsReceived: 0 }
+    ])
+    const reports: QualityReport[] = []
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 40,
+      onReport: (report) => reports.push(report)
+    })
+
+    monitor.start()
+    await tick()
+    connection.setReports([
+      { type: 'inbound-rtp', bytesReceived: 3_000, packetsLost: 0, packetsReceived: 100 }
+    ])
+    await tick()
+    monitor.stop()
+
+    // Nunca some do agregado: o comportamento anterior era somar tudo junto.
+    expect(reports[1]!.inboundBitrateKbps).toBe(Math.round((3_000 * 8) / QUALITY_UPDATE_INTERVAL_MS))
+  })
+
+  it('dois inbound-rtp de audio na mesma conexao: fica o de maior packetsReceived', async () => {
+    const connection = new FakeConnection([
+      { type: 'inbound-rtp', kind: 'audio', bytesReceived: 100, packetsReceived: 10, jitter: 0.1 },
+      { type: 'inbound-rtp', kind: 'audio', bytesReceived: 900, packetsReceived: 90, jitter: 0.9 }
+    ])
+    let seen: ReadonlyMap<string, InboundAudioStats> | null = null
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 10,
+      onReport: () => {},
+      onInboundAudioStats: (stats) => {
+        seen = stats
+      }
+    })
+
+    monitor.start()
+    await tick()
+    monitor.stop()
+
+    const audio = (seen as unknown as ReadonlyMap<string, InboundAudioStats>).get('tx1')
+    expect(audio?.packetsReceived).toBe(90)
+    expect(audio?.jitter).toBe(0.9)
+  })
+
+  it('o consumidor de audio e opcional de verdade', async () => {
+    const connection = new FakeConnection([
+      { type: 'inbound-rtp', kind: 'audio', bytesReceived: 100, packetsReceived: 10 }
+    ])
+    const reports: QualityReport[] = []
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 10,
+      onReport: (report) => reports.push(report)
+    })
+
+    monitor.start()
+    await expect(tick(2)).resolves.toBeUndefined()
+    monitor.stop()
+
+    expect(reports).toHaveLength(2)
+  })
+
+  it('audio saudavel nao escreve NENHUMA linha de diagnostico', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const connection = new FakeConnection([
+      {
+        type: 'inbound-rtp',
+        kind: 'audio',
+        bytesReceived: 200,
+        packetsLost: 0,
+        packetsReceived: 50,
+        concealmentEvents: 0,
+        concealedSamples: 0,
+        packetsDiscarded: 0
+      }
+    ])
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 10,
+      onReport: () => {}
+    })
+
+    monitor.start()
+    await tick(3)
+    monitor.stop()
+
+    expect(warn.mock.calls.filter((call) => String(call[0]).startsWith('[audio-stats]'))).toEqual([])
+  })
+
+  it('concealment escreve UMA linha, e o tick seguinte dentro da janela nao escreve outra', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = {
+      type: 'inbound-rtp',
+      kind: 'audio',
+      bytesReceived: 200,
+      packetsLost: 0,
+      packetsReceived: 50,
+      concealmentEvents: 0,
+      concealedSamples: 0,
+      packetsDiscarded: 0,
+      jitter: 0.021
+    }
+    const connection = new FakeConnection([{ ...base }])
+    const monitor = new StatsMonitor({
+      inboundEntries: () => [{ txId: 'tx1', connection: connection.asPeerConnection() }],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 10,
+      onReport: () => {}
+    })
+
+    monitor.start()
+    // Primeiro tick: sem amostra anterior nao ha delta, entao nao ha linha.
+    await tick()
+    connection.setReports([{ ...base, concealmentEvents: 3, concealedSamples: 1_440 }])
+    await tick()
+    connection.setReports([{ ...base, concealmentEvents: 6, concealedSamples: 2_880 }])
+    await tick()
+    monitor.stop()
+
+    const lines = warn.mock.calls.filter((call) => String(call[0]).startsWith('[audio-stats]'))
+    expect(lines).toHaveLength(1)
+    expect(String(lines[0]![0])).toBe(
+      '[audio-stats] tx tx1 delta conceal=3 amostras=1440 descartados=0 perdidos=0 jitter=0.021'
+    )
+  })
+
+  it('um txId que sai de inboundEntries nao deixa entrada para tras', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = {
+      type: 'inbound-rtp',
+      kind: 'audio',
+      bytesReceived: 200,
+      packetsLost: 0,
+      packetsReceived: 50,
+      concealmentEvents: 0,
+      concealedSamples: 0,
+      packetsDiscarded: 0
+    }
+    const connection = new FakeConnection([{ ...base, concealmentEvents: 9 }])
+    let live = true
+    const monitor = new StatsMonitor({
+      inboundEntries: () =>
+        live ? [{ txId: 'tx1', connection: connection.asPeerConnection() }] : [],
+      outboundEntries: () => [],
+      onOutboundVideoStats: () => {},
+      averageRttMs: () => 10,
+      onReport: () => {}
+    })
+
+    monitor.start()
+    await tick()
+    live = false
+    await tick()
+    // O mesmo txId volta com os contadores ZERADOS (transmissao nova). Se a
+    // amostra velha tivesse ficado guardada, o delta daria negativo e a poda
+    // nao teria acontecido; com a poda, nao ha anterior e nao sai linha.
+    live = true
+    connection.setReports([{ ...base, concealmentEvents: 0 }])
+    await tick()
+    monitor.stop()
+
+    expect(warn.mock.calls.filter((call) => String(call[0]).startsWith('[audio-stats]'))).toEqual([])
   })
 })

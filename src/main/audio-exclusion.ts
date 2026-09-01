@@ -23,6 +23,8 @@ import {
   type AudioExclusionStatus,
   type AudioExclusionUnavailableReason
 } from '@shared/ipc'
+import { AUDIO_LOG_WINDOW_MS } from '@shared/config'
+import { createThrottledCounter, type ThrottledCounter } from '@shared/log-throttle'
 // O pacote nativo NUNCA lanca no import: sem o binario ele exporta um stub que
 // responde `probe()` com o motivo, e o app segue no caminho degradado.
 import { probe as probeNativeAddon } from 'zoi-audio-capture'
@@ -40,10 +42,27 @@ type CaptureMode = AudioWorkerConfig['mode']
 interface ExclusionSession {
   worker: UtilityProcess
   mode: CaptureMode
+  /**
+   * Identidade da SESSAO de captura (RF-08), nao do worker: a cascata re-forka o
+   * worker e o id continua o mesmo, que e o que liga o degrau A->B a mesma
+   * transmissao no arquivo de log.
+   */
+  captureId: string
   /** Quantas vezes a cascata ja re-forkou nesta sessao. */
   restarts: number
   /** Parada voluntaria: `exit` depois disso nao dispara a cascata. */
   disposing: boolean
+  /**
+   * Contadores com janela dos dois relatorios de diagnostico que podem repetir.
+   * Um app que abre e fecha sessao de audio varias vezes por segundo faria o
+   * motor emitir `active`/`skipped` na mesma cadencia; sem janela, isso encheria
+   * o arquivo do dia. A linha que sai carrega o estado MAIS RECENTE e quantas
+   * mudancas foram suprimidas.
+   */
+  activeLog: ThrottledCounter
+  skippedLog: ThrottledCounter
+  lastActiveDetail: string
+  lastSkippedDetail: string
 }
 
 let session: ExclusionSession | null = null
@@ -58,7 +77,9 @@ export function registerAudioExclusionWindow(getter: () => BrowserWindow | null)
 function sendStatus(status: AudioExclusionStatus): void {
   logToFile(
     'info',
-    `[audio-exclusion] estado ${status.state}${status.detail ? `: ${status.detail}` : ''}`
+    `[audio-exclusion] sessao ${status.captureId ?? 'sem-sessao'} estado ${status.state}${
+      status.detail ? `: ${status.detail}` : ''
+    }`
   )
   getWindow?.()?.webContents.send(IPC.audioExclusionStatus, status)
 }
@@ -139,7 +160,11 @@ function workerScriptPath(): string {
   )
 }
 
-function spawnWorker(mode: CaptureMode, restarts: number): ExclusionSession | null {
+function spawnWorker(
+  mode: CaptureMode,
+  restarts: number,
+  captureId: string
+): ExclusionSession | null {
   let worker: UtilityProcess
   try {
     worker = utilityProcess.fork(workerScriptPath(), [], {
@@ -152,7 +177,17 @@ function spawnWorker(mode: CaptureMode, restarts: number): ExclusionSession | nu
     return null
   }
 
-  const created: ExclusionSession = { worker, mode, restarts, disposing: false }
+  const created: ExclusionSession = {
+    worker,
+    mode,
+    captureId,
+    restarts,
+    disposing: false,
+    activeLog: createThrottledCounter(AUDIO_LOG_WINDOW_MS),
+    skippedLog: createThrottledCounter(AUDIO_LOG_WINDOW_MS),
+    lastActiveDetail: '',
+    lastSkippedDetail: ''
+  }
 
   worker.on('message', (message: AudioWorkerEvent | undefined) => {
     if (!message || typeof message.type !== 'string') return
@@ -161,6 +196,52 @@ function spawnWorker(mode: CaptureMode, restarts: number): ExclusionSession | nu
     if (message.type === 'status') {
       if (message.state === 'failed') {
         escalate(created, message.detail || 'motor de captura falhou')
+        return
+      }
+
+      // Os quatro estados abaixo sao DIAGNOSTICO: nenhum deles pode disparar a
+      // cascata de degradacao, e um `state` desconhecido continua sendo
+      // descartado em silencio, como era o comportamento de hoje.
+      if (message.state === 'active') {
+        created.lastActiveDetail = message.detail
+        const summary = created.activeLog.record(Date.now())
+        if (summary) {
+          logToFile(
+            'info',
+            `[audio-native] ${created.captureId} active (${summary.count} mudancas em ${summary.sinceMs} ms): ${created.lastActiveDetail}`
+          )
+        }
+        return
+      }
+      if (message.state === 'skipped') {
+        created.lastSkippedDetail = message.detail
+        const summary = created.skippedLog.record(Date.now())
+        if (summary) {
+          logToFile(
+            'info',
+            `[audio-native] ${created.captureId} skipped (${summary.count} mudancas em ${summary.sinceMs} ms): ${created.lastSkippedDetail}`
+          )
+        }
+        return
+      }
+      if (message.state === 'health') {
+        // Sem throttle aqui: o proprio C++ ja limita a uma linha a cada 15 s.
+        logToFile('warn', `[audio-native] ${created.captureId} health: ${message.detail}`)
+        return
+      }
+      if (message.state === 'app-skipped') {
+        logToFile('warn', `[audio-native] ${created.captureId} app-skipped: ${message.detail}`)
+        // Um toast sem nome de aplicativo nao ajuda ninguem: sem detalhe, o
+        // evento fica so no log.
+        if (message.detail) {
+          sendStatus({
+            state: 'app-not-captured',
+            detail: message.detail,
+            captureId: created.captureId,
+            app: message.detail
+          })
+        }
+        return
       }
       return
     }
@@ -194,11 +275,11 @@ function escalate(previous: ExclusionSession, reason: string): void {
   previous.worker.kill()
   session = null
 
-  logToFile('warn', `[audio-exclusion] degradando: ${reason}`)
+  logToFile('warn', `[audio-exclusion] sessao ${previous.captureId} degradando: ${reason}`)
 
   // Degrau 1: uma retentativa no mesmo modo (falha transitoria do motor).
   if (previous.mode === 'process-exclusion' && previous.restarts === 0) {
-    const retry = spawnWorker('process-exclusion', 1)
+    const retry = spawnWorker('process-exclusion', 1, previous.captureId)
     if (retry) {
       session = retry
       return
@@ -207,15 +288,20 @@ function escalate(previous: ExclusionSession, reason: string): void {
 
   // Degrau 2: loopback classico do endpoint, sempre disponivel.
   if (previous.mode === 'process-exclusion') {
-    const fallback = spawnWorker('endpoint-loopback', previous.restarts + 1)
+    const fallback = spawnWorker('endpoint-loopback', previous.restarts + 1, previous.captureId)
     if (fallback) {
       session = fallback
-      sendStatus({ state: 'degraded-full-loopback', detail: reason })
+      sendStatus({
+        state: 'degraded-full-loopback',
+        detail: reason,
+        captureId: previous.captureId,
+        app: null
+      })
       return
     }
   }
 
-  sendStatus({ state: 'failed', detail: reason })
+  sendStatus({ state: 'failed', detail: reason, captureId: previous.captureId, app: null })
 }
 
 export async function startAudioExclusion(): Promise<AudioExclusionStartResult> {
@@ -237,14 +323,20 @@ export async function startAudioExclusion(): Promise<AudioExclusionStartResult> 
     return unavailable(isMissingBinary ? 'addon-load-failed' : 'activation-failed')
   }
 
-  const started = spawnWorker('process-exclusion', 0)
+  // Um id por SESSAO de exclusao, gerado ANTES do fork: a cascata re-forka o
+  // worker e leva o mesmo id adiante (2b.1 da SPEC).
+  const captureId = `ax-${Date.now().toString(36)}`
+
+  const started = spawnWorker('process-exclusion', 0, captureId)
   if (!started) return unavailable('worker-spawn-failed')
 
   session = started
+  logToFile('info', `[audio-exclusion] sessao ${captureId} iniciada em process-exclusion`)
   return {
     mode: 'process-exclusion',
     sampleRate: AUDIO_EXCLUSION_SAMPLE_RATE,
-    channels: AUDIO_EXCLUSION_CHANNELS
+    channels: AUDIO_EXCLUSION_CHANNELS,
+    captureId
   }
 }
 

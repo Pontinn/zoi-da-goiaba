@@ -18,6 +18,46 @@ constexpr DWORD kActivationTimeoutMs = 3000;
 constexpr REFERENCE_TIME kBufferDuration = 200000;
 /** Cadencia da reconciliacao. Cobre as tres redes do SPEC secao 2.1. */
 constexpr DWORD kReconcileIntervalMs = 1000;
+/** Janela minima entre dois relatorios `health`. */
+constexpr ULONGLONG kHealthReportIntervalMs = 15000;
+/** Janela minima entre duas emissoes de `app-skipped` da MESMA chave. */
+constexpr ULONGLONG kAppSkippedReplayMs = 10000;
+/**
+ * Por quanto tempo, a partir da subida do motor, a reemissao de `app-skipped`
+ * acontece. Depois disso cada chave e emitida uma unica vez.
+ *
+ * O numero e ~30x o tempo tipico entre o fork do worker e a interface assinar o
+ * canal de status (selecao de fonte mais setup de track), com folga deliberada
+ * para maquina lenta ou usuario demorando no seletor de fonte.
+ */
+constexpr ULONGLONG kAppSkippedReplayWindowMs = 60000;
+
+/** Por que uma sessao vista nao esta sendo capturada. */
+enum SkipReason { kForbiddenTree = 0, kForbiddenSubtree = 1, kActivationFailed = 2 };
+
+const char* SkipReasonText(int reason) {
+  switch (reason) {
+    case kForbiddenSubtree:
+      return "subarvore-proibida";
+    case kActivationFailed:
+      return "falha-ativacao";
+    default:
+      return "arvore-proibida";
+  }
+}
+
+/**
+ * O motivo vira aviso na interface?
+ *
+ * `arvore-proibida` NUNCA vira aviso: e o Discord e o proprio Zoi, ou seja o
+ * comportamento PRETENDIDO da captura por aplicativo. Avisar "o som do
+ * discord.exe nao esta indo na transmissao" seria alarmar o usuario com o
+ * produto funcionando, varias vezes por sessao. Os TRES motivos vao para o log;
+ * so DOIS viram aviso.
+ */
+bool IsWarnableReason(int reason) {
+  return reason == kForbiddenSubtree || reason == kActivationFailed;
+}
 
 std::string FormatHr(const char* stage, HRESULT hr) {
   char buffer[160];
@@ -381,6 +421,43 @@ void Engine::Report(const std::string& state, const std::string& detail) {
   if (statusSink_) statusSink_(state, detail);
 }
 
+void Engine::ReportRaw(const std::string& state, const std::string& detail) {
+  if (statusSink_) statusSink_(state, detail);
+}
+
+void Engine::SetPcmDropCounter(std::shared_ptr<std::atomic<uint64_t>> counter) {
+  pcmDropCounter_ = std::move(counter);
+}
+
+void Engine::ReportHealth() {
+  const ULONGLONG now = GetTickCount64();
+
+  // 1. Janela: sai sem tocar em contador nenhum.
+  if (lastHealthAt_ != 0 && now - lastHealthAt_ < kHealthReportIntervalMs) return;
+
+  // 2. Gatilho por PEEK, nunca por drenagem: `TakeHealth` e `exchange` ZERAM os
+  //    contadores, e checar drenando apagaria justamente os eventos que se quer
+  //    reportar quando a janela ainda nao abriu. `silentTicks` fica de FORA do
+  //    gatilho de proposito: tique mudo e o estado normal de um aplicativo
+  //    parado, e coloca-lo aqui faria o relatorio sair a cada 15 s para sempre,
+  //    em qualquer maquina.
+  const bool worth = mixer_.HasUnderrun() || (pcmDropCounter_ && pcmDropCounter_->load() > 0);
+  if (!worth) return;
+
+  // 3. So agora drena.
+  const MixerHealth health = mixer_.TakeHealth();
+  const uint64_t drops = pcmDropCounter_ ? pcmDropCounter_->exchange(0) : 0;
+
+  char buffer[160];
+  snprintf(buffer, sizeof(buffer), "underruns=%llu quadros=%llu mudos=%llu descartes-tsfn=%llu",
+           static_cast<unsigned long long>(health.underrunTicks),
+           static_cast<unsigned long long>(health.underrunFrames),
+           static_cast<unsigned long long>(health.silentTicks),
+           static_cast<unsigned long long>(drops));
+  ReportRaw("health", buffer);
+  lastHealthAt_ = now;
+}
+
 void Engine::PublishSources() {
   std::vector<AudioRingBuffer*> sources;
   if (endpointCapture_) sources.push_back(endpointCapture_->Buffer());
@@ -391,6 +468,7 @@ void Engine::PublishSources() {
 }
 
 void Engine::RunControlThread() {
+  engineStartedAt_ = GetTickCount64();
   const HRESULT comHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   const bool comOwned = SUCCEEDED(comHr);
 
@@ -423,6 +501,7 @@ void Engine::RunControlThread() {
     } else {
       ReconcileEndpoint();
     }
+    ReportHealth();
   }
 
   // Derruba tudo ainda dentro do apartamento COM que criou os objetos.
@@ -435,6 +514,7 @@ void Engine::RunControlThread() {
 
 void Engine::Reconcile(ProcessSnapshot* snapshot) {
   if (!snapshot->Refresh()) return;
+  skipped_.clear();
 
   std::vector<DWORD> sessionPids;
   if (FAILED(scanner_.ListSessionPids(&sessionPids))) {
@@ -448,8 +528,13 @@ void Engine::Reconcile(ProcessSnapshot* snapshot) {
   // Passo 1: so sessoes de PID vivo e fora de qualquer arvore proibida.
   std::vector<DWORD> allowed;
   for (const DWORD pid : sessionPids) {
+    // Sessao de PID ja morto nao e recusa: e corrida normal entre a enumeracao
+    // e a tabela de processos, entao nao entra na lista de diagnostico.
     if (!snapshot->Contains(pid)) continue;
-    if (snapshot->IsForbidden(pid, options_.forbidden)) continue;
+    if (snapshot->IsForbidden(pid, options_.forbidden)) {
+      skipped_.push_back({pid, kForbiddenTree, S_OK});
+      continue;
+    }
     allowed.push_back(pid);
   }
 
@@ -472,7 +557,10 @@ void Engine::Reconcile(ProcessSnapshot* snapshot) {
   // dentro da arvore da ancora, o include NAO abre (e fecha se estava aberto).
   std::unordered_set<DWORD> keep;
   for (const DWORD pid : anchors) {
-    if (snapshot->SubtreeContainsAny(pid, forbidden)) continue;
+    if (snapshot->SubtreeContainsAny(pid, forbidden)) {
+      skipped_.push_back({pid, kForbiddenSubtree, S_OK});
+      continue;
+    }
     keep.insert(pid);
   }
 
@@ -506,8 +594,10 @@ void Engine::Reconcile(ProcessSnapshot* snapshot) {
     auto stream = std::make_unique<CaptureStream>(
         static_cast<size_t>(options_.format.sampleRate) / 5, options_.format);
     std::string detail;
-    if (FAILED(stream->StartProcessInclude(pid, &detail))) {
+    const HRESULT startHr = stream->StartProcessInclude(pid, &detail);
+    if (FAILED(startHr)) {
       // Falha parcial nao derruba o motor: segue com as outras capturas.
+      skipped_.push_back({pid, kActivationFailed, startHr});
       continue;
     }
     captures_[pid] = std::move(stream);
@@ -518,10 +608,65 @@ void Engine::Reconcile(ProcessSnapshot* snapshot) {
     PublishSources();
     Report("active", DescribeAnchors(*snapshot));
   }
+
+  // Log das sessoes vistas e nao capturadas. Este caminho e INCONDICIONAL e nao
+  // depende de assinante nenhum: e a transparencia que substitui o aviso que o
+  // sistema nao tem informacao para dar.
+  const std::string signature = DescribeSkipped(*snapshot, sessionPids.size());
+  if (signature != lastSkippedSignature_) {
+    lastSkippedSignature_ = signature;
+    ReportRaw("skipped", signature);
+  }
+
+  // Aviso por aplicativo, so para os motivos AVISAVEIS. A reemissao existe
+  // porque o motor roda o primeiro Reconcile milissegundos depois do fork,
+  // muito antes de a interface assinar o canal de status: sem ela, a unica
+  // emissao cairia no vazio e o aviso nunca chegaria ao usuario.
+  const ULONGLONG now = GetTickCount64();
+  const bool withinReplayWindow = (now - engineStartedAt_) < kAppSkippedReplayWindowMs;
+  for (const SkipEntry& entry : skipped_) {
+    if (!IsWarnableReason(entry.reason)) continue;
+    const uint64_t key =
+        static_cast<uint64_t>(entry.pid) * 256ull + static_cast<uint64_t>(entry.reason);
+    const auto found = warnedApps_.find(key);
+    const bool isNew = found == warnedApps_.end();
+    const bool canRepeat =
+        !isNew && withinReplayWindow && (now - found->second) >= kAppSkippedReplayMs;
+    if (!isNew && !canRepeat) continue;
+
+    warnedApps_[key] = now;
+    const ProcessEntry* process = snapshot->Find(entry.pid);
+    ReportRaw("app-skipped", process ? ToUtf8(process->exeName) : std::string());
+  }
+}
+
+std::string Engine::DescribeSkipped(const ProcessSnapshot& snapshot, size_t seenCount) const {
+  std::string detail = "vistas=" + std::to_string(seenCount);
+  int listed = 0;
+  for (const SkipEntry& entry : skipped_) {
+    if (listed >= 10) {
+      detail += " ...";
+      break;
+    }
+    const ProcessEntry* process = snapshot.Find(entry.pid);
+    detail += " " + std::to_string(entry.pid) + ":" +
+              (process ? ToUtf8(process->exeName) : "?") + "=" + SkipReasonText(entry.reason);
+    if (entry.reason == kActivationFailed) {
+      char code[16];
+      snprintf(code, sizeof(code), "(0x%08lX)", static_cast<unsigned long>(entry.hr));
+      detail += code;
+    }
+    ++listed;
+  }
+  return detail;
 }
 
 std::string Engine::DescribeAnchors(const ProcessSnapshot& snapshot) const {
   std::string detail = "capturas=" + std::to_string(captures_.size());
+  detail += " endpoints=" + scanner_.DescribeEndpoints();
+  // A AUSENCIA do campo e o caso normal; a presenca dele e o sinal, no log de
+  // campo, de que o dispositivo padrao do sistema ficou de fora da varredura.
+  if (!scanner_.DefaultEndpointBound()) detail += " padrao=nao";
   int listed = 0;
   for (const auto& pair : captures_) {
     if (listed >= 10) {
