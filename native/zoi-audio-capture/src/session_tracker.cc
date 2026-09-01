@@ -12,6 +12,15 @@ namespace {
 /** Corta cadeias de parentesco patologicas (ou ciclicas) na varredura. */
 constexpr int kMaxAncestorDepth = 64;
 
+/**
+ * Teto de endpoints de render escaneados por volta. Sem ele, uma maquina com
+ * muitos dispositivos virtuais (HDMI por monitor, cabo de audio, placa de
+ * captura) poderia truncar justamente o dispositivo que funcionava antes; com
+ * ele mais a insercao do padrao na posicao 0, o dispositivo de hoje nunca e
+ * cortado.
+ */
+constexpr size_t kMaxScannedEndpoints = 8;
+
 }  // namespace
 
 std::wstring ToLowerBaseName(const std::wstring& path) {
@@ -231,82 +240,184 @@ HRESULT SessionScanner::Open(HANDLE wakeEvent) {
   return Reopen();
 }
 
-HRESULT SessionScanner::Reopen() {
-  if (!enumerator_) return E_UNEXPECTED;
+bool SessionScanner::BindEndpoint(const Microsoft::WRL::ComPtr<IMMDevice>& device,
+                                  EndpointBinding* out) {
+  if (!device) return false;
 
-  if (manager_ && sessionNotifier_) {
-    manager_->UnregisterSessionNotification(sessionNotifier_.Get());
+  Microsoft::WRL::ComPtr<IAudioSessionManager2> manager;
+  if (FAILED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, &manager))) {
+    return false;
   }
-  sessionNotifier_.Reset();
-  manager_.Reset();
-  device_.Reset();
-
-  HRESULT hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
-  if (FAILED(hr)) return hr;
-
-  hr = device_->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, &manager_);
-  if (FAILED(hr)) return hr;
 
   // Uma enumeracao inicial e pre-requisito documentado para que o
   // IAudioSessionManager2 comece a emitir OnSessionCreated.
   Microsoft::WRL::ComPtr<IAudioSessionEnumerator> sessions;
-  manager_->GetSessionEnumerator(&sessions);
+  manager->GetSessionEnumerator(&sessions);
 
-  sessionNotifier_ = Microsoft::WRL::Make<SessionNotifier>(wakeEvent_);
-  hr = manager_->RegisterSessionNotification(sessionNotifier_.Get());
-  if (FAILED(hr)) sessionNotifier_.Reset();
+  Microsoft::WRL::ComPtr<IAudioSessionNotification> notifier =
+      Microsoft::WRL::Make<SessionNotifier>(wakeEvent_);
+  // Registro que falha nao invalida o binding: a deteccao de sessao nova
+  // naquele dispositivo passa a depender so do poll de 1 s, que ja e a rede de
+  // seguranca declarada. Degradacao suave, nunca perda.
+  if (FAILED(manager->RegisterSessionNotification(notifier.Get()))) notifier.Reset();
 
-  return S_OK;
+  out->device = device;
+  out->manager = manager;
+  out->notifier = notifier;
+  return true;
+}
+
+HRESULT SessionScanner::Reopen() {
+  if (!enumerator_) return E_UNEXPECTED;
+
+  for (EndpointBinding& binding : endpoints_) {
+    if (binding.manager && binding.notifier) {
+      binding.manager->UnregisterSessionNotification(binding.notifier.Get());
+    }
+  }
+  endpoints_.clear();
+  defaultBound_ = false;
+
+  // Dispositivo padrao de console: o unico que NAO pode ser cortado pelo teto
+  // nem perdido em silencio, porque e o unico que a versao anterior escaneava.
+  Microsoft::WRL::ComPtr<IMMDevice> defaultDevice;
+  const HRESULT defaultHr =
+      enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+
+  std::wstring defaultId;
+  if (SUCCEEDED(defaultHr) && defaultDevice) {
+    LPWSTR rawId = nullptr;
+    if (SUCCEEDED(defaultDevice->GetId(&rawId)) && rawId) {
+      defaultId.assign(rawId);
+      CoTaskMemFree(rawId);
+    }
+  }
+
+  Microsoft::WRL::ComPtr<IMMDeviceCollection> collection;
+  if (SUCCEEDED(enumerator_->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection)) &&
+      collection) {
+    UINT count = 0;
+    if (FAILED(collection->GetCount(&count))) count = 0;
+
+    for (UINT index = 0; index < count; ++index) {
+      if (endpoints_.size() >= kMaxScannedEndpoints) break;
+
+      Microsoft::WRL::ComPtr<IMMDevice> device;
+      if (FAILED(collection->Item(index, &device)) || !device) continue;
+
+      bool isDefault = false;
+      LPWSTR rawId = nullptr;
+      if (SUCCEEDED(device->GetId(&rawId)) && rawId) {
+        isDefault = !defaultId.empty() && defaultId == rawId;
+        CoTaskMemFree(rawId);
+      }
+
+      EndpointBinding binding;
+      // Um dispositivo problematico nunca derruba os outros.
+      if (!BindEndpoint(device, &binding)) continue;
+
+      if (isDefault) {
+        endpoints_.insert(endpoints_.begin(), std::move(binding));
+        defaultBound_ = true;
+      } else {
+        endpoints_.push_back(std::move(binding));
+      }
+    }
+  }
+
+  // Degrau de seguranca, nivel 6a: o padrao nao foi vinculado (a enumeracao
+  // falhou, ele nao apareceu na colecao, ou o Activate dele falhou). Tenta
+  // EXPLICITAMENTE o caminho de antes desta feature. Este passo roda mesmo com
+  // `endpoints_` ja cheio de outros dispositivos: sem ele, um Activate que
+  // falhasse so no padrao enquanto outro dispositivo funcionasse faria o unico
+  // endpoint da versao anterior sumir sem erro e sem log.
+  if (!defaultBound_) {
+    Microsoft::WRL::ComPtr<IMMDevice> fallback = defaultDevice;
+    HRESULT fallbackHr = defaultHr;
+    if (!fallback) {
+      fallbackHr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &fallback);
+    }
+    EndpointBinding binding;
+    if (SUCCEEDED(fallbackHr) && fallback && BindEndpoint(fallback, &binding)) {
+      endpoints_.insert(endpoints_.begin(), std::move(binding));
+      defaultBound_ = true;
+    } else if (endpoints_.empty()) {
+      // Nivel 6b, ultimo recurso: sem endpoint nenhum, devolve o HRESULT da
+      // falha do padrao, que e o que o motor ja transforma em `failed` hoje.
+      return FAILED(fallbackHr) ? fallbackHr : E_FAIL;
+    }
+  }
+
+  return endpoints_.empty() ? E_FAIL : S_OK;
 }
 
 void SessionScanner::Close() {
-  if (manager_ && sessionNotifier_) {
-    manager_->UnregisterSessionNotification(sessionNotifier_.Get());
+  for (EndpointBinding& binding : endpoints_) {
+    if (binding.manager && binding.notifier) {
+      binding.manager->UnregisterSessionNotification(binding.notifier.Get());
+    }
   }
+  endpoints_.clear();
+  defaultBound_ = false;
   if (enumerator_ && deviceNotifier_) {
     enumerator_->UnregisterEndpointNotificationCallback(deviceNotifier_.Get());
   }
-  sessionNotifier_.Reset();
   deviceNotifier_.Reset();
-  manager_.Reset();
-  device_.Reset();
   enumerator_.Reset();
   wakeEvent_ = nullptr;
 }
 
+std::string SessionScanner::DescribeEndpoints() const {
+  return std::to_string(endpoints_.size());
+}
+
+bool SessionScanner::DefaultEndpointBound() const {
+  return defaultBound_;
+}
+
 HRESULT SessionScanner::ListSessionPids(std::vector<DWORD>* out) const {
   out->clear();
-  if (!manager_) return E_UNEXPECTED;
+  if (endpoints_.empty()) return E_UNEXPECTED;
 
-  Microsoft::WRL::ComPtr<IAudioSessionEnumerator> sessions;
-  HRESULT hr = manager_->GetSessionEnumerator(&sessions);
-  if (FAILED(hr)) return hr;
-
-  int count = 0;
-  hr = sessions->GetCount(&count);
-  if (FAILED(hr)) return hr;
-
+  // O `seen` vive FORA do laco de endpoints: e ele que faz a UNIAO sem
+  // repeticao. O mesmo processo com sessao em dois dispositivos vira uma unica
+  // ancora, que e o correto (o include captura o que o processo renderiza, nao
+  // o que um dispositivo toca).
   std::unordered_set<DWORD> seen;
-  for (int index = 0; index < count; ++index) {
-    Microsoft::WRL::ComPtr<IAudioSessionControl> control;
-    if (FAILED(sessions->GetSession(index, &control))) continue;
+  bool anyEndpointAnswered = false;
 
-    Microsoft::WRL::ComPtr<IAudioSessionControl2> control2;
-    if (FAILED(control.As(&control2))) continue;
+  for (const EndpointBinding& binding : endpoints_) {
+    if (!binding.manager) continue;
 
-    // Sessao de sons do sistema nao tem processo dono utilizavel.
-    if (control2->IsSystemSoundsSession() == S_OK) continue;
+    Microsoft::WRL::ComPtr<IAudioSessionEnumerator> sessions;
+    if (FAILED(binding.manager->GetSessionEnumerator(&sessions)) || !sessions) continue;
 
-    AudioSessionState state = AudioSessionStateInactive;
-    if (SUCCEEDED(control->GetState(&state)) && state == AudioSessionStateExpired) continue;
+    int count = 0;
+    if (FAILED(sessions->GetCount(&count))) continue;
+    anyEndpointAnswered = true;
 
-    DWORD pid = 0;
-    if (FAILED(control2->GetProcessId(&pid)) || pid == 0) continue;
+    for (int index = 0; index < count; ++index) {
+      Microsoft::WRL::ComPtr<IAudioSessionControl> control;
+      if (FAILED(sessions->GetSession(index, &control))) continue;
 
-    if (seen.insert(pid).second) out->push_back(pid);
+      Microsoft::WRL::ComPtr<IAudioSessionControl2> control2;
+      if (FAILED(control.As(&control2))) continue;
+
+      // Sessao de sons do sistema nao tem processo dono utilizavel.
+      if (control2->IsSystemSoundsSession() == S_OK) continue;
+
+      AudioSessionState state = AudioSessionStateInactive;
+      if (SUCCEEDED(control->GetState(&state)) && state == AudioSessionStateExpired) continue;
+
+      DWORD pid = 0;
+      if (FAILED(control2->GetProcessId(&pid)) || pid == 0) continue;
+
+      if (seen.insert(pid).second) out->push_back(pid);
+    }
   }
 
-  return S_OK;
+  // So e erro quando NENHUM endpoint respondeu.
+  return anyEndpointAnswered ? S_OK : E_FAIL;
 }
 
 HRESULT SessionScanner::GetDefaultDevice(Microsoft::WRL::ComPtr<IMMDevice>* out) const {

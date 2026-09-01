@@ -3,8 +3,14 @@
 // Duas responsabilidades, ambas de LEITURA:
 //   1. ProcessSnapshot: foto da arvore de processos (Toolhelp32) com consultas
 //      de parentesco resistentes a reuso de PID.
-//   2. SessionScanner: quais PIDs tem sessao de audio no endpoint de render
-//      padrao, mais as notificacoes de sessao nova e de troca de endpoint.
+//   2. SessionScanner: quais PIDs tem sessao de audio nos endpoints de render
+//      ATIVOS, mais as notificacoes de sessao nova e de troca de endpoint.
+//
+// Por que TODOS os endpoints ativos e nao so o padrao: uma sessao roteada para
+// outro dispositivo (roteamento por aplicativo do Windows 11) ou vivendo numa
+// role diferente era simplesmente INVISIVEL para a enumeracao, e essa e uma das
+// causas candidatas do sintoma de aplicativo mudo. A lista e um superconjunto
+// estrito da de antes, com o dispositivo padrao garantido na posicao 0.
 //
 // A classificacao vive aqui, mas a ESCOLHA de ancora vive no motor: subir a
 // cadeia de ancestrais serve so para DETECTAR arvore proibida, nunca para
@@ -103,15 +109,37 @@ class SessionScanner {
   /** PIDs com sessao de audio, sem repeticao e sem as sessoes de sistema. */
   HRESULT ListSessionPids(std::vector<DWORD>* out) const;
 
-  /** Dispositivo de render padrao atual (para o modo endpoint-loopback). */
+  /**
+   * Dispositivo de render padrao atual (para o modo endpoint-loopback).
+   * INALTERADA de proposito: nesse modo "sistema inteiro" quer dizer o
+   * dispositivo padrao do sistema, e nao a uniao de todos.
+   */
   HRESULT GetDefaultDevice(Microsoft::WRL::ComPtr<IMMDevice>* out) const;
 
+  /** Quantos endpoints estao vinculados agora (vai no texto de diagnostico). */
+  std::string DescribeEndpoints() const;
+  /**
+   * O dispositivo PADRAO do sistema esta entre os vinculados? Falso significa
+   * que a captura esta rodando sem ele, e e a unica forma de quem le o log
+   * saber disso.
+   */
+  bool DefaultEndpointBound() const;
+
  private:
+  /** Um endpoint de render aberto: dispositivo, gerenciador e notificacao. */
+  struct EndpointBinding {
+    Microsoft::WRL::ComPtr<IMMDevice> device;
+    Microsoft::WRL::ComPtr<IAudioSessionManager2> manager;
+    Microsoft::WRL::ComPtr<IAudioSessionNotification> notifier;
+  };
+
+  /** Abre um dispositivo e monta o binding. Devolve false se o Activate falhar. */
+  bool BindEndpoint(const Microsoft::WRL::ComPtr<IMMDevice>& device, EndpointBinding* out);
+
   HANDLE wakeEvent_ = nullptr;
   Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator_;
-  Microsoft::WRL::ComPtr<IMMDevice> device_;
-  Microsoft::WRL::ComPtr<IAudioSessionManager2> manager_;
-  Microsoft::WRL::ComPtr<IAudioSessionNotification> sessionNotifier_;
+  std::vector<EndpointBinding> endpoints_;
+  bool defaultBound_ = false;
   Microsoft::WRL::ComPtr<IMMNotificationClient> deviceNotifier_;
 };
 

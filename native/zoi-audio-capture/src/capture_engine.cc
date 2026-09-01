@@ -663,6 +663,10 @@ std::string Engine::DescribeSkipped(const ProcessSnapshot& snapshot, size_t seen
 
 std::string Engine::DescribeAnchors(const ProcessSnapshot& snapshot) const {
   std::string detail = "capturas=" + std::to_string(captures_.size());
+  detail += " endpoints=" + scanner_.DescribeEndpoints();
+  // A AUSENCIA do campo e o caso normal; a presenca dele e o sinal, no log de
+  // campo, de que o dispositivo padrao do sistema ficou de fora da varredura.
+  if (!scanner_.DefaultEndpointBound()) detail += " padrao=nao";
   int listed = 0;
   for (const auto& pair : captures_) {
     if (listed >= 10) {
