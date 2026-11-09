@@ -98,7 +98,7 @@ Prioridades de projeto, nesta ordem:
 - Controle de volume local por espectador
 - Moderação pelo dono da sala (desconectar e banir), com transferência automática em caso de queda
 - Reconexão automática, com janela de tolerância de 15 segundos
-- Sons de notificação próprios, gravados na boca pelo próprio criador, e saudações variadas na abertura
+- Sons de notificação próprios e saudações variadas na abertura
 - Atualização automática via GitHub Releases
 
 ## Histórico de versões
@@ -111,7 +111,7 @@ Prioridades de projeto, nesta ordem:
 | v0.3.0 | Escada de codecs de vídeo (AV1/VP9/H264/VP8), modo nitidez e modo compatibilidade |
 | v0.4.0 | Ponteiros dos espectadores sobre a tela real de quem transmite |
 | v0.5.0 | Qualidade de áudio (correção de estalos, captura por aplicativo em todos os dispositivos de saída, avisos mais claros) e diagnóstico de áudio nos logs |
-| v0.5.1 | Novos efeitos sonoros do app (entrou, saiu, transmitindo, parou a transmissão, desconectado, erro de conexão, reconectado) |
+| v0.5.1 | Novos efeitos sonoros do app, substituindo os gravados na boca pelo criador (entrou, saiu, transmitindo, parou a transmissão, desconectado, erro de conexão, reconectado) |
 
 A versão instalada aparece nas configurações do app. Detalhes de cada release em
 [Releases](https://github.com/Pontinn/zoi-da-goiaba/releases).
