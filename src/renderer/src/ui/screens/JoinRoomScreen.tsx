@@ -1,23 +1,47 @@
 // Entrada por codigo: mesma validacao do criar sala + mensagens de recusa
 // (sala cheia, banido, sala nao encontrada, versao incompativel).
-import { useState, type CSSProperties } from 'react'
+import { useId, useRef, useState, type CSSProperties } from 'react'
 import { ROOM_CODE_MAX_LENGTH } from '@shared/config'
 import { normalize, validateRoomCode } from '../../core/room-code'
 import { JoinRejectedError, JoinTimeoutError, RoomNotFoundError, session } from '../../services/session'
 import { useAppStore } from '../../store/app-store'
 import { Button, IconButton } from '../components/Button'
 import { TextInput } from '../components/TextInput'
-import { ArrowLeftIcon } from '../components/icons'
+import { ArrowLeftIcon, PasteIcon } from '../components/icons'
 import { closeDoors, openDoors } from '../components/DoorsTransition'
+import { readText } from '../clipboard'
 import { rememberLastRoom } from '../last-room'
 import { ROOM_CODE_MESSAGES } from '../validation'
 
 export function JoinRoomScreen(): JSX.Element {
   const setRoute = useAppStore((state) => state.setRoute)
+  const pushToast = useAppStore((state) => state.pushToast)
   const prefill = useAppStore.getState().prefillCode
   const [code, setCode] = useState(prefill ?? '')
   const [error, setError] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const inputId = useId()
+
+  // Mesma normalizacao do onChange do campo: minusculas e sem espacos.
+  const toFieldValue = (raw: string): string => normalize(raw).replace(/\s+/g, '')
+
+  // Cola sem Ctrl+V. Nao entra sozinho: a pessoa confirma com Enter ou Entrar.
+  const paste = async (): Promise<void> => {
+    const text = await readText()
+    const pasted = text === null ? '' : toFieldValue(text).slice(0, ROOM_CODE_MAX_LENGTH)
+    if (!pasted) {
+      pushToast('warning', 'Nao consegui ler a area de transferencia; use Ctrl+V.')
+      inputRef.current?.focus()
+      return
+    }
+    setCode(pasted)
+    // Conteudo que nao e codigo valido entra mesmo assim, com a mesma mensagem
+    // que o Entrar mostraria, para a pessoa ver o que veio.
+    const validation = validateRoomCode(pasted)
+    setError(validation.ok ? null : ROOM_CODE_MESSAGES[validation.error])
+    inputRef.current?.focus()
+  }
 
   const join = async (): Promise<void> => {
     if (joining) return
@@ -73,24 +97,42 @@ export function JoinRoomScreen(): JSX.Element {
           </div>
 
           <div className="z-panel__card z-item-enter" style={{ '--z-delay': '70ms' } as CSSProperties}>
-            <TextInput
-              label="Codigo da sala"
-              value={code}
-              mono
-              autoFocus
-              maxLength={ROOM_CODE_MAX_LENGTH}
-              placeholder="ex: goiaba-4f2k"
-              data-testid="join-code-input"
-              onChange={(event) => {
-                setCode(normalize(event.target.value).replace(/\s+/g, ''))
-                if (error) setError(null)
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void join()
-              }}
-              error={error}
-              hint="Maiusculas e minusculas dao no mesmo."
-            />
+            <div className="z-field">
+              <label className="z-field__label" htmlFor={inputId}>
+                Codigo da sala
+              </label>
+              <div className="z-code-row">
+                <TextInput
+                  ref={inputRef}
+                  id={inputId}
+                  value={code}
+                  mono
+                  autoFocus
+                  maxLength={ROOM_CODE_MAX_LENGTH}
+                  placeholder="ex: goiaba-4f2k"
+                  data-testid="join-code-input"
+                  onChange={(event) => {
+                    setCode(toFieldValue(event.target.value))
+                    if (error) setError(null)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void join()
+                  }}
+                  error={error}
+                  hint="Maiusculas e minusculas dao no mesmo."
+                />
+                <div className="z-code-row__buttons">
+                  <IconButton
+                    label="Colar codigo"
+                    onClick={() => void paste()}
+                    disabled={joining}
+                    data-testid="join-code-paste"
+                  >
+                    <PasteIcon size={18} />
+                  </IconButton>
+                </div>
+              </div>
+            </div>
           </div>
 
           <Button
