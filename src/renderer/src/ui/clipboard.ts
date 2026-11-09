@@ -8,3 +8,13 @@ export async function copyText(text: string): Promise<boolean> {
     return false
   }
 }
+
+// Le a area de transferencia (botao "Colar codigo"). `null` quando a leitura
+// falha ou a Clipboard API nao existe: o chamador orienta a usar Ctrl+V.
+export async function readText(): Promise<string | null> {
+  try {
+    return await navigator.clipboard.readText()
+  } catch {
+    return null
+  }
+}
