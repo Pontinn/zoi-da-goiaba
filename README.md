@@ -101,6 +101,20 @@ Prioridades de projeto, nesta ordem:
 - Sons de notificação próprios, inspirados em jogos como World of Warcraft, Dark Souls, Resident Evil, Baldur's Gate e Deadlock, e saudações variadas na abertura
 - Atualização automática via GitHub Releases
 
+### Sons do app
+
+Cada som do app é inspirado em um jogo que o criador gosta:
+
+| Som | Jogo | Como soa |
+|---|---|---|
+| entrou | World of Warcraft | sininho de sussurro |
+| saiu | Resident Evil | porta rangendo e batendo |
+| transmitindo | World of Warcraft | corneta de raid |
+| parou-transmissao | Deadlock | bips sci-fi desligando |
+| desconectado | Dark Souls | YOU DIED |
+| erro-conexao | Baldur's Gate | harpa azeda com baque |
+| reconectado | World of Warcraft | fanfarra de level up |
+
 ## Histórico de versões
 
 | Versão | O que trouxe |
