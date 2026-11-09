@@ -126,6 +126,7 @@ Cada som do app é inspirado em um jogo que o criador gosta:
 | v0.4.0 | Ponteiros dos espectadores sobre a tela real de quem transmite |
 | v0.5.0 | Qualidade de áudio (correção de estalos, captura por aplicativo em todos os dispositivos de saída, avisos mais claros) e diagnóstico de áudio nos logs |
 | v0.5.1 | Novos efeitos sonoros do app, inspirados em jogos (World of Warcraft, Dark Souls, Resident Evil, Baldur's Gate e Deadlock), substituindo os gravados na boca pelo criador |
+| v0.5.2 | Botão para colar o código da sala na tela de entrar, sem precisar de Ctrl+V |
 
 A versão instalada aparece nas configurações do app. Detalhes de cada release em
 [Releases](https://github.com/Pontinn/zoi-da-goiaba/releases).
